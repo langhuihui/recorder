@@ -22,6 +22,7 @@ export function AudioRecorder() {
   const analyserRef = useRef<AnalyserNode | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const isRecordingRef = useRef<boolean>(false)
 
   const drawWaveform = useCallback(() => {
     if (!canvasRef.current || !analyserRef.current) return
@@ -35,7 +36,7 @@ export function AudioRecorder() {
     const dataArray = new Uint8Array(bufferLength)
 
     const draw = () => {
-      if (recordingState !== "recording") return
+      if (!isRecordingRef.current) return
 
       animationRef.current = requestAnimationFrame(draw)
       analyser.getByteTimeDomainData(dataArray)
@@ -43,8 +44,10 @@ export function AudioRecorder() {
       ctx.fillStyle = "rgba(23, 23, 35, 0.3)"
       ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-      ctx.lineWidth = 2
+      ctx.lineWidth = 2.5
       ctx.strokeStyle = "#4ade80"
+      ctx.shadowColor = "#4ade80"
+      ctx.shadowBlur = 4
       ctx.beginPath()
 
       const sliceWidth = canvas.width / bufferLength
@@ -65,10 +68,11 @@ export function AudioRecorder() {
 
       ctx.lineTo(canvas.width, canvas.height / 2)
       ctx.stroke()
+      ctx.shadowBlur = 0
     }
 
     draw()
-  }, [recordingState])
+  }, [])
 
   const startRecording = async () => {
     try {
@@ -116,7 +120,8 @@ export function AudioRecorder() {
         setDuration((prev) => prev + 1)
       }, 1000)
 
-      // 开始绘制波形
+      // 设置录制状态并开始绘制波形
+      isRecordingRef.current = true
       drawWaveform()
     } catch (error) {
       console.error("无法访问麦克风:", error)
@@ -126,6 +131,9 @@ export function AudioRecorder() {
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && recordingState === "recording") {
+      // 先停止波形绘制
+      isRecordingRef.current = false
+      
       mediaRecorderRef.current.stop()
       setRecordingState("stopped")
 
@@ -156,13 +164,21 @@ export function AudioRecorder() {
     setCurrentTime(0)
     setIsPlaying(false)
     audioChunksRef.current = []
+    isRecordingRef.current = false
 
-    // 清空画布
+    // 清空画布并绘制静态中心线
     if (canvasRef.current) {
       const ctx = canvasRef.current.getContext("2d")
       if (ctx) {
         ctx.fillStyle = "rgba(23, 23, 35, 1)"
         ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height)
+        // 绘制静态中心线
+        ctx.strokeStyle = "rgba(74, 222, 128, 0.3)"
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(0, canvasRef.current.height / 2)
+        ctx.lineTo(canvasRef.current.width, canvasRef.current.height / 2)
+        ctx.stroke()
       }
     }
   }
@@ -230,10 +246,18 @@ export function AudioRecorder() {
   // 初始化画布
   useEffect(() => {
     if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext("2d")
+      const canvas = canvasRef.current
+      const ctx = canvas.getContext("2d")
       if (ctx) {
         ctx.fillStyle = "rgba(23, 23, 35, 1)"
-        ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height)
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        // 绘制静态中心线
+        ctx.strokeStyle = "rgba(74, 222, 128, 0.3)"
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(0, canvas.height / 2)
+        ctx.lineTo(canvas.width, canvas.height / 2)
+        ctx.stroke()
       }
     }
   }, [])
