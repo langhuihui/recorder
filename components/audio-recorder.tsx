@@ -211,7 +211,13 @@ export function AudioRecorder() {
 
   const startRecording = async () => {
     try {
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      })
       const audioCtx = new AudioContext()
       audioContextRef.current = audioCtx
 
