@@ -23,6 +23,8 @@ export function AudioRecorder() {
   const audioContextRef = useRef<AudioContext | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const isRecordingRef = useRef<boolean>(false)
+  // 存储历史波形样本：每帧采集一个振幅值（0~1），最多保留 10s * 60fps = 600 个点
+  const waveHistoryRef = useRef<number[]>([])
 
   const drawWaveform = useCallback(() => {
     if (!canvasRef.current || !analyserRef.current) return
@@ -32,8 +34,12 @@ export function AudioRecorder() {
     if (!ctx) return
 
     const analyser = analyserRef.current
-    const bufferLength = analyser.frequencyBinCount
+    // 使用频域数据采集振幅峰值，fftSize 决定时域缓冲区大小
+    const bufferLength = analyser.fftSize
     const dataArray = new Uint8Array(bufferLength)
+
+    // 10 秒 × 60fps，每帧在画布上占 1 列像素
+    const HISTORY_MAX = 600
 
     const draw = () => {
       if (!isRecordingRef.current) return
@@ -41,32 +47,109 @@ export function AudioRecorder() {
       animationRef.current = requestAnimationFrame(draw)
       analyser.getByteTimeDomainData(dataArray)
 
-      ctx.fillStyle = "rgba(23, 23, 35, 0.3)"
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-      ctx.lineWidth = 2.5
-      ctx.strokeStyle = "#4ade80"
-      ctx.shadowColor = "#4ade80"
-      ctx.shadowBlur = 4
-      ctx.beginPath()
-
-      const sliceWidth = canvas.width / bufferLength
-      let x = 0
-
+      // 计算本帧的峰值振幅（归一化到 0~1）
+      let peak = 0
       for (let i = 0; i < bufferLength; i++) {
-        const v = dataArray[i] / 128.0
-        const y = (v * canvas.height) / 2
-
-        if (i === 0) {
-          ctx.moveTo(x, y)
-        } else {
-          ctx.lineTo(x, y)
-        }
-
-        x += sliceWidth
+        const v = Math.abs(dataArray[i] - 128) / 128
+        if (v > peak) peak = v
+      }
+      waveHistoryRef.current.push(peak)
+      if (waveHistoryRef.current.length > HISTORY_MAX) {
+        waveHistoryRef.current.shift()
       }
 
-      ctx.lineTo(canvas.width, canvas.height / 2)
+      const history = waveHistoryRef.current
+      const w = canvas.width
+      const h = canvas.height
+      const cx = h / 2
+
+      // 清空画布
+      ctx.fillStyle = "#17172c"
+      ctx.fillRect(0, 0, w, h)
+
+      // 绘制时间刻度线（每秒一条，约 60 帧）
+      const framesPerSecond = 60
+      const pixelsPerFrame = w / HISTORY_MAX
+      ctx.strokeStyle = "rgba(74, 222, 128, 0.08)"
+      ctx.lineWidth = 1
+      for (let s = 1; s <= 10; s++) {
+        const frameIndex = history.length - s * framesPerSecond
+        if (frameIndex < 0) continue
+        const x = (frameIndex / HISTORY_MAX) * w
+        ctx.beginPath()
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, h)
+        ctx.stroke()
+      }
+
+      // 绘制中心基准线
+      ctx.strokeStyle = "rgba(74, 222, 128, 0.15)"
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, cx)
+      ctx.lineTo(w, cx)
+      ctx.stroke()
+
+      if (history.length < 2) return
+
+      // 上半部分波形路径
+      ctx.beginPath()
+      for (let i = 0; i < history.length; i++) {
+        const x = (i / HISTORY_MAX) * w
+        const y = cx - history[i] * cx * 0.9
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      // 下半部分镜像（闭合路径填充）
+      for (let i = history.length - 1; i >= 0; i--) {
+        const x = (i / HISTORY_MAX) * w
+        const y = cx + history[i] * cx * 0.9
+        ctx.lineTo(x, y)
+      }
+      ctx.closePath()
+
+      // 渐变填充
+      const grad = ctx.createLinearGradient(0, 0, 0, h)
+      grad.addColorStop(0, "rgba(74, 222, 128, 0.5)")
+      grad.addColorStop(0.5, "rgba(74, 222, 128, 0.15)")
+      grad.addColorStop(1, "rgba(74, 222, 128, 0.5)")
+      ctx.fillStyle = grad
+      ctx.fill()
+
+      // 描边轮廓（上边缘）
+      ctx.beginPath()
+      for (let i = 0; i < history.length; i++) {
+        const x = (i / HISTORY_MAX) * w
+        const y = cx - history[i] * cx * 0.9
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.strokeStyle = "#4ade80"
+      ctx.lineWidth = 1.5
+      ctx.shadowColor = "#4ade80"
+      ctx.shadowBlur = 6
+      ctx.stroke()
+
+      // 描边轮廓（下边缘）
+      ctx.beginPath()
+      for (let i = 0; i < history.length; i++) {
+        const x = (i / HISTORY_MAX) * w
+        const y = cx + history[i] * cx * 0.9
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+      ctx.shadowBlur = 0
+
+      // 右侧"当前位置"游标线
+      const curX = (history.length / HISTORY_MAX) * w
+      ctx.strokeStyle = "rgba(74, 222, 128, 0.6)"
+      ctx.lineWidth = 1.5
+      ctx.shadowColor = "#4ade80"
+      ctx.shadowBlur = 8
+      ctx.beginPath()
+      ctx.moveTo(curX, 0)
+      ctx.lineTo(curX, h)
       ctx.stroke()
       ctx.shadowBlur = 0
     }
@@ -85,8 +168,9 @@ export function AudioRecorder() {
       source.connect(analyserRef.current)
       analyserRef.current.fftSize = 2048
 
-      // 清空之前的录音
+      // 清空之前的录音和波形历史
       audioChunksRef.current = []
+      waveHistoryRef.current = []
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl)
         setAudioUrl(null)
@@ -165,6 +249,7 @@ export function AudioRecorder() {
     setIsPlaying(false)
     audioChunksRef.current = []
     isRecordingRef.current = false
+    waveHistoryRef.current = []
 
     // 清空画布并绘制静态中心线
     if (canvasRef.current) {
@@ -251,7 +336,7 @@ export function AudioRecorder() {
       if (ctx) {
         ctx.fillStyle = "rgba(23, 23, 35, 1)"
         ctx.fillRect(0, 0, canvas.width, canvas.height)
-        // 绘制静态中心线
+        // 绘���静态中心线
         ctx.strokeStyle = "rgba(74, 222, 128, 0.3)"
         ctx.lineWidth = 1
         ctx.beginPath()
