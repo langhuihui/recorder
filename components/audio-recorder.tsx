@@ -220,6 +220,17 @@ export function AudioRecorder() {
       })
       const audioCtx = new AudioContext()
       audioContextRef.current = audioCtx
+      // AudioContext may start in 'suspended' state when created after an async
+      // await (e.g. getUserMedia) — even inside a user-gesture handler.
+      // Explicitly resume so audio routed through the context (including bgAudio
+      // via createMediaElementSource) actually reaches the speakers.
+      try {
+        await audioCtx.resume()
+      } catch (resumeErr) {
+        console.error("无法激活音频上下文，请重试:", resumeErr)
+        alert("无法激活音频上下文，请重试。")
+        return
+      }
 
       const destination = audioCtx.createMediaStreamDestination()
 

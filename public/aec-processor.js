@@ -19,9 +19,17 @@ class AECProcessor extends AudioWorkletProcessor {
     super()
     const opts = (options && options.processorOptions) || {}
     // Number of adaptive filter taps (models up to filterLength/sampleRate seconds of room delay)
-    this.filterLength = opts.filterLength || 512
+    const filterLength = opts.filterLength || 512
+    if (!Number.isInteger(filterLength) || filterLength <= 0) {
+      throw new Error(`filterLength must be a positive integer, got: ${filterLength}`)
+    }
+    this.filterLength = filterLength
     // NLMS step size: 0 < mu < 2 for stability; ~0.5 balances speed and robustness
-    this.mu = opts.mu !== undefined ? opts.mu : 0.5
+    const mu = opts.mu !== undefined ? opts.mu : 0.5
+    if (mu <= 0 || mu >= 2) {
+      throw new Error(`mu must satisfy 0 < mu < 2 for NLMS stability, got: ${mu}`)
+    }
+    this.mu = mu
     // Regularization to avoid division by zero when the reference signal is silent
     this.epsilon = 1e-8
 
