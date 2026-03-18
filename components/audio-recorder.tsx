@@ -254,12 +254,16 @@ export function AudioRecorder() {
 
         bgSource.connect(gainNode)
         gainNode.connect(bgAnalyser)
-        gainNode.connect(mixAnalyser)
+        gainNode.connect(mixAnalyser)       // 音乐 → 混音显示
         gainNode.connect(destination)
         gainNode.connect(audioCtx.destination)
 
+        // 立即播放音乐（必须在 await 之前调用，以保持浏览器用户手势激活上下文有效）
+        bgAudio.play()
+
         // 自适应回声消除（AEC）：用背景音乐的干净信号作为参考，消除麦克风
-        // 采集到的音乐声，保留人声。回退到直连以防 AudioWorklet 不可用。
+        // 采集到的音乐声，保留人声。AEC 输出（仅人声）和音乐数字信号各自独立
+        // 混入录音目标，最终录音 = 人声 + 音乐。回退到直连以防 AudioWorklet 不可用。
         try {
           await audioCtx.audioWorklet.addModule("/aec-processor.js")
           const aecNode = new AudioWorkletNode(audioCtx, "aec-processor", {
@@ -272,13 +276,12 @@ export function AudioRecorder() {
           gainNode.connect(aecNode, 0, 1)   // 音乐参考 → AEC 输入 1
           aecNode.connect(destination)       // 消除回声后的人声 → 录音
           aecNode.connect(mixAnalyser)       // 消除回声后的人声 → 混音显示
-        } catch {
+        } catch (aecErr) {
           // 回退：直连麦克风（无 AEC）
+          console.error("AEC worklet 加载失败，回退到直连麦克风:", aecErr)
           micSource.connect(destination)
           micSource.connect(mixAnalyser)
         }
-
-        bgAudio.play()
       } else {
         // 无背景音乐，麦克风直连录音
         micSource.connect(destination)
