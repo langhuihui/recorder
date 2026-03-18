@@ -4,8 +4,6 @@ import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2, Music, X, Loader2 } from "lucide-react"
-import { FFmpeg } from "@ffmpeg/ffmpeg"
-import { fetchFile, toBlobURL } from "@ffmpeg/util"
 
 type RecordingState = "idle" | "recording" | "stopped"
 
@@ -40,27 +38,34 @@ export function AudioRecorder() {
   const bgAudioElementRef = useRef<HTMLAudioElement | null>(null)
   const bgGainNodeRef = useRef<GainNode | null>(null)
   const bgFileInputRef = useRef<HTMLInputElement>(null)
-  const ffmpegRef = useRef<FFmpeg | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ffmpegRef = useRef<any>(null)
   const audioBlobRef = useRef<Blob | null>(null)
 
   const HISTORY_MAX = 600
 
-  // 加载 FFmpeg
-  const loadFfmpeg = async () => {
-    if (ffmpegLoaded) return
-    const ffmpeg = new FFmpeg()
-    ffmpegRef.current = ffmpeg
-    const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm"
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-    })
-    setFfmpegLoaded(true)
-  }
+  // 动态加载 FFmpeg
+  const loadFfmpeg = useCallback(async () => {
+    if (ffmpegLoaded || ffmpegRef.current) return
+    try {
+      const { FFmpeg } = await import("@ffmpeg/ffmpeg")
+      const { toBlobURL } = await import("@ffmpeg/util")
+      const ffmpeg = new FFmpeg()
+      ffmpegRef.current = ffmpeg
+      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm"
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+      })
+      setFfmpegLoaded(true)
+    } catch (err) {
+      console.error("FFmpeg 加载失败:", err)
+    }
+  }, [ffmpegLoaded])
 
   useEffect(() => {
     loadFfmpeg()
-  }, [])
+  }, [loadFfmpeg])
 
   const getPeak = (analyser: AnalyserNode) => {
     const bufferLength = analyser.fftSize
@@ -326,6 +331,7 @@ export function AudioRecorder() {
       }
       setIsConverting(true)
       try {
+        const { fetchFile } = await import("@ffmpeg/util")
         const ffmpeg = ffmpegRef.current
         await ffmpeg.writeFile("input", await fetchFile(file))
         await ffmpeg.exec(["-i", "input", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
@@ -382,6 +388,7 @@ export function AudioRecorder() {
     if (!audioBlobRef.current || !ffmpegRef.current || !ffmpegLoaded) return
     setIsConverting(true)
     try {
+      const { fetchFile } = await import("@ffmpeg/util")
       const ffmpeg = ffmpegRef.current
       await ffmpeg.writeFile("input.webm", await fetchFile(audioBlobRef.current))
       await ffmpeg.exec(["-i", "input.webm", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
