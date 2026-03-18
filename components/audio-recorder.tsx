@@ -223,19 +223,17 @@ export function AudioRecorder() {
 
       const destination = audioCtx.createMediaStreamDestination()
 
-      // 麦克风分析器
+      // 麦克风分析器（显示原始麦克风信号）
       const micAnalyser = audioCtx.createAnalyser()
       micAnalyser.fftSize = 2048
       micAnalyserRef.current = micAnalyser
       const micSource = audioCtx.createMediaStreamSource(micStream)
       micSource.connect(micAnalyser)
-      micSource.connect(destination)
 
       // 混音分析器
       const mixAnalyser = audioCtx.createAnalyser()
       mixAnalyser.fftSize = 2048
       mixAnalyserRef.current = mixAnalyser
-      micSource.connect(mixAnalyser)
 
       // 背景音乐
       if (bgMusicUrl) {
@@ -260,7 +258,31 @@ export function AudioRecorder() {
         gainNode.connect(destination)
         gainNode.connect(audioCtx.destination)
 
+        // 自适应回声消除（AEC）：用背景音乐的干净信号作为参考，消除麦克风
+        // 采集到的音乐声，保留人声。回退到直连以防 AudioWorklet 不可用。
+        try {
+          await audioCtx.audioWorklet.addModule("/aec-processor.js")
+          const aecNode = new AudioWorkletNode(audioCtx, "aec-processor", {
+            numberOfInputs: 2,
+            numberOfOutputs: 1,
+            outputChannelCount: [1],
+            processorOptions: { filterLength: 512, mu: 0.5 },
+          })
+          micSource.connect(aecNode, 0, 0)  // 麦克风 → AEC 输入 0
+          gainNode.connect(aecNode, 0, 1)   // 音乐参考 → AEC 输入 1
+          aecNode.connect(destination)       // 消除回声后的人声 → 录音
+          aecNode.connect(mixAnalyser)       // 消除回声后的人声 → 混音显示
+        } catch {
+          // 回退：直连麦克风（无 AEC）
+          micSource.connect(destination)
+          micSource.connect(mixAnalyser)
+        }
+
         bgAudio.play()
+      } else {
+        // 无背景音乐，麦克风直连录音
+        micSource.connect(destination)
+        micSource.connect(mixAnalyser)
       }
 
       // 清空
