@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2 } from "lucide-react"
+import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2, Music, X, Upload } from "lucide-react"
 
 type RecordingState = "idle" | "recording" | "paused" | "stopped"
 
@@ -13,6 +13,9 @@ export function AudioRecorder() {
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [bgMusicFile, setBgMusicFile] = useState<File | null>(null)
+  const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null)
+  const [bgVolume, setBgVolume] = useState(0.5)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -25,6 +28,9 @@ export function AudioRecorder() {
   const isRecordingRef = useRef<boolean>(false)
   // 存储历史波形样本：每帧采集一个振幅值（0~1），最多保留 10s * 60fps = 600 个点
   const waveHistoryRef = useRef<number[]>([])
+  const bgAudioElementRef = useRef<HTMLAudioElement | null>(null)
+  const bgGainNodeRef = useRef<GainNode | null>(null)
+  const bgFileInputRef = useRef<HTMLInputElement>(null)
 
   const drawWaveform = useCallback(() => {
     if (!canvasRef.current || !analyserRef.current) return
@@ -159,14 +165,43 @@ export function AudioRecorder() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
-      // 设置音频分析器用于波形显示
-      audioContextRef.current = new AudioContext()
-      analyserRef.current = audioContextRef.current.createAnalyser()
-      const source = audioContextRef.current.createMediaStreamSource(stream)
-      source.connect(analyserRef.current)
-      analyserRef.current.fftSize = 2048
+      const audioCtx = new AudioContext()
+      audioContextRef.current = audioCtx
+
+      // 混音目标节点 — MediaRecorder 录这一路
+      const destination = audioCtx.createMediaStreamDestination()
+
+      // 分析器接到混音总线，波形反映混合信号
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 2048
+      analyserRef.current = analyser
+
+      // 接入麦克风
+      const micSource = audioCtx.createMediaStreamSource(micStream)
+      micSource.connect(analyser)
+      micSource.connect(destination)
+
+      // 接入背景音乐（如果有）
+      if (bgMusicUrl) {
+        const bgAudio = new Audio()
+        bgAudio.src = bgMusicUrl
+        bgAudio.loop = true
+        bgAudio.crossOrigin = "anonymous"
+        bgAudioElementRef.current = bgAudio
+
+        const bgSource = audioCtx.createMediaElementSource(bgAudio)
+        const gainNode = audioCtx.createGain()
+        gainNode.gain.value = bgVolume
+        bgGainNodeRef.current = gainNode
+
+        bgSource.connect(gainNode)
+        gainNode.connect(analyser)
+        gainNode.connect(destination)
+
+        bgAudio.play()
+      }
 
       // 清空之前的录音和波形历史
       audioChunksRef.current = []
@@ -176,7 +211,8 @@ export function AudioRecorder() {
         setAudioUrl(null)
       }
 
-      const mediaRecorder = new MediaRecorder(stream)
+      // 用混音流创建 MediaRecorder
+      const mediaRecorder = new MediaRecorder(destination.stream)
       mediaRecorderRef.current = mediaRecorder
 
       mediaRecorder.ondataavailable = (event) => {
@@ -190,8 +226,8 @@ export function AudioRecorder() {
         const url = URL.createObjectURL(audioBlob)
         setAudioUrl(url)
 
-        // 停止所有轨道
-        stream.getTracks().forEach((track) => track.stop())
+        // 停止麦克风轨道
+        micStream.getTracks().forEach((track) => track.stop())
       }
 
       mediaRecorder.start()
@@ -217,7 +253,13 @@ export function AudioRecorder() {
     if (mediaRecorderRef.current && recordingState === "recording") {
       // 先停止波形绘制
       isRecordingRef.current = false
-      
+
+      // 停止背景音乐
+      if (bgAudioElementRef.current) {
+        bgAudioElementRef.current.pause()
+        bgAudioElementRef.current = null
+      }
+
       mediaRecorderRef.current.stop()
       setRecordingState("stopped")
 
@@ -238,7 +280,27 @@ export function AudioRecorder() {
     }
   }
 
+  const handleBgMusicUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (bgMusicUrl) URL.revokeObjectURL(bgMusicUrl)
+    const url = URL.createObjectURL(file)
+    setBgMusicFile(file)
+    setBgMusicUrl(url)
+  }
+
+  const removeBgMusic = () => {
+    if (bgMusicUrl) URL.revokeObjectURL(bgMusicUrl)
+    setBgMusicFile(null)
+    setBgMusicUrl(null)
+    if (bgFileInputRef.current) bgFileInputRef.current.value = ""
+  }
+
   const resetRecording = () => {
+    if (bgAudioElementRef.current) {
+      bgAudioElementRef.current.pause()
+      bgAudioElementRef.current = null
+    }
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl)
     }
@@ -379,6 +441,64 @@ export function AudioRecorder() {
           </p>
         </div>
 
+        {/* 背景音乐上传区 */}
+        <div className="mb-6">
+          <p className="text-sm font-medium text-muted-foreground mb-2">背景音乐（可选）</p>
+          {!bgMusicFile ? (
+            <button
+              type="button"
+              onClick={() => bgFileInputRef.current?.click()}
+              disabled={recordingState === "recording"}
+              className="w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-secondary/30 px-4 py-4 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Upload className="w-4 h-4" />
+              点击上传背景音乐（MP3 / WAV / OGG）
+            </button>
+          ) : (
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-3">
+              <Music className="w-4 h-4 shrink-0 text-primary" />
+              <span className="flex-1 text-sm text-foreground truncate">{bgMusicFile.name}</span>
+              {/* 音量滑块 */}
+              <div className="flex items-center gap-2 shrink-0">
+                <Volume2 className="w-3.5 h-3.5 text-muted-foreground" />
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={bgVolume}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value)
+                    setBgVolume(v)
+                    if (bgGainNodeRef.current) bgGainNodeRef.current.gain.value = v
+                  }}
+                  className="w-20 accent-primary cursor-pointer"
+                  aria-label="背景音量"
+                />
+                <span className="text-xs text-muted-foreground w-7 text-right">
+                  {Math.round(bgVolume * 100)}%
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={removeBgMusic}
+                disabled={recordingState === "recording"}
+                className="shrink-0 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                aria-label="移除背景音乐"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+          <input
+            ref={bgFileInputRef}
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={handleBgMusicUpload}
+          />
+        </div>
+
         {/* 波形显示区域 */}
         <div className="relative mb-8 rounded-lg overflow-hidden bg-secondary/50 border border-border">
           <canvas
@@ -392,7 +512,9 @@ export function AudioRecorder() {
           {recordingState === "recording" && (
             <div className="absolute top-3 left-3 flex items-center gap-2">
               <span className="w-3 h-3 bg-destructive rounded-full animate-pulse" />
-              <span className="text-sm font-medium text-destructive">录制中</span>
+              <span className="text-sm font-medium text-destructive">
+                录制中{bgMusicFile ? " · 含背景音乐" : ""}
+              </span>
             </div>
           )}
 
@@ -421,7 +543,7 @@ export function AudioRecorder() {
         )}
 
         {/* 控制按钮 */}
-        <div className="flex items-center justify-center gap-4">
+        <div className="flex items-center justify-center gap-4 flex-wrap">
           {recordingState === "idle" && (
             <Button
               onClick={startRecording}
