@@ -52,9 +52,9 @@ export function AudioRecorder() {
       const { toBlobURL } = await import("@ffmpeg/util")
       const ffmpeg = new FFmpeg()
       ffmpegRef.current = ffmpeg
-      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm"
+      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.9/dist/esm"
       await ffmpeg.load({
-        classWorkerURL: "/ffmpeg/worker.js",
+        classWorkerURL: `${window.location.origin}/ffmpeg/worker.js`,
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
       })
