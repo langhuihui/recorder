@@ -252,6 +252,7 @@ export function AudioRecorder() {
         gainNode.connect(bgAnalyser)
         gainNode.connect(mixAnalyser)
         gainNode.connect(destination)
+        gainNode.connect(audioCtx.destination)
 
         bgAudio.play()
       }
