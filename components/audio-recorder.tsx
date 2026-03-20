@@ -3,10 +3,9 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2, Music, X, Loader2, Headphones, CircleHelp } from "lucide-react"
+import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2, Music, Loader2, Headphones, Share2 } from "lucide-react"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import packageJson from "@/package.json"
 
 const APP_VERSION = (packageJson as { version?: string }).version ?? "unknown"
@@ -25,6 +24,8 @@ export function AudioRecorder() {
   const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null)
   const [bgVolume, setBgVolume] = useState(0.5)
   const [isBgDropActive, setIsBgDropActive] = useState(false)
+  const [bgDuration, setBgDuration] = useState(0)
+  const [bgCurrentTime, setBgCurrentTime] = useState(0)
   const [isConverting, setIsConverting] = useState(false)
   const [outputExt, setOutputExt] = useState<string>("") // ".m4a" / ".webm"
 
@@ -62,6 +63,8 @@ export function AudioRecorder() {
   const bgGainNodeRef = useRef<GainNode | null>(null)
   const bgFileInputRef = useRef<HTMLInputElement>(null)
   const audioBlobRef = useRef<Blob | null>(null)
+  const bgTimeUpdateHandlerRef = useRef<EventListener | null>(null)
+  const bgLoadedMetadataHandlerRef = useRef<EventListener | null>(null)
   // 录音期间的 PCM 缓存（WebM 导出 MP3 时使用）
   const pcmChunksRef = useRef<Float32Array[]>([])
   const pcmSampleRateRef = useRef<number>(0)
@@ -293,11 +296,29 @@ export function AudioRecorder() {
 
       // 背景音乐
       if (bgMusicUrl) {
+        setBgCurrentTime(0)
+        setBgDuration(0)
+
         const bgAudio = new Audio()
         bgAudio.src = bgMusicUrl
         bgAudio.loop = true
         bgAudio.crossOrigin = "anonymous"
         bgAudioElementRef.current = bgAudio
+
+        const onBgLoadedMetadata: EventListener = () => {
+          const d = bgAudio.duration
+          if (Number.isFinite(d) && d > 0) setBgDuration(d)
+        }
+        const onBgTimeUpdate: EventListener = () => {
+          const t = bgAudio.currentTime
+          if (Number.isFinite(t) && t >= 0) setBgCurrentTime(t)
+          const d = bgAudio.duration
+          if (Number.isFinite(d) && d > 0) setBgDuration(d)
+        }
+        bgLoadedMetadataHandlerRef.current = onBgLoadedMetadata
+        bgTimeUpdateHandlerRef.current = onBgTimeUpdate
+        bgAudio.addEventListener("loadedmetadata", onBgLoadedMetadata)
+        bgAudio.addEventListener("timeupdate", onBgTimeUpdate)
 
         const bgSource = audioCtx.createMediaElementSource(bgAudio)
         const gainNode = audioCtx.createGain()
@@ -326,7 +347,9 @@ export function AudioRecorder() {
           micSource.connect(mixAnalyser)
         }
 
-        bgAudio.play()
+        bgAudio.play().catch((err) => {
+          console.warn("背景音乐播放失败:", err)
+        })
       } else {
         // 无背景音乐，麦克风直连录音
         micSource.connect(destination)
@@ -422,9 +445,17 @@ export function AudioRecorder() {
     if (mediaRecorderRef.current && recordingState === "recording") {
       isRecordingRef.current = false
       if (bgAudioElementRef.current) {
-        bgAudioElementRef.current.pause()
+        const bgAudio = bgAudioElementRef.current
+        if (bgTimeUpdateHandlerRef.current) {
+          bgAudio.removeEventListener("timeupdate", bgTimeUpdateHandlerRef.current)
+        }
+        if (bgLoadedMetadataHandlerRef.current) {
+          bgAudio.removeEventListener("loadedmetadata", bgLoadedMetadataHandlerRef.current)
+        }
+        bgAudio.pause()
         bgAudioElementRef.current = null
       }
+      setBgCurrentTime(0)
       mediaRecorderRef.current.stop()
       setRecordingState("stopped")
       if (timerRef.current) clearInterval(timerRef.current)
@@ -484,6 +515,44 @@ export function AudioRecorder() {
     const url = URL.createObjectURL(file)
     setBgMusicFile(file)
     setBgMusicUrl(url)
+    setBgDuration(0)
+    setBgCurrentTime(0)
+
+    // 选择后立即尝试解析时长，避免必须开始录音后才看到总时长。
+    try {
+      const detectedDuration = await new Promise<number>((resolve) => {
+        const probeAudio = new Audio()
+        let done = false
+        const cleanup = () => {
+          probeAudio.removeEventListener("loadedmetadata", onLoadedMetadata)
+          probeAudio.removeEventListener("error", onError)
+          probeAudio.src = ""
+        }
+        const finish = (value: number) => {
+          if (done) return
+          done = true
+          cleanup()
+          resolve(value)
+        }
+        const onLoadedMetadata = () => {
+          const d = probeAudio.duration
+          finish(Number.isFinite(d) && d > 0 ? d : 0)
+        }
+        const onError = () => finish(0)
+
+        probeAudio.preload = "metadata"
+        probeAudio.addEventListener("loadedmetadata", onLoadedMetadata)
+        probeAudio.addEventListener("error", onError)
+        probeAudio.src = url
+        probeAudio.load()
+
+        // 防止元数据解析异常时长时间不返回。
+        window.setTimeout(() => finish(0), 3000)
+      })
+      setBgDuration(detectedDuration)
+    } catch {
+      setBgDuration(0)
+    }
   }
 
   const handleBgMusicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -497,12 +566,23 @@ export function AudioRecorder() {
     setBgMusicFile(null)
     setBgMusicUrl(null)
     if (bgFileInputRef.current) bgFileInputRef.current.value = ""
+    setBgDuration(0)
+    setBgCurrentTime(0)
+    bgTimeUpdateHandlerRef.current = null
+    bgLoadedMetadataHandlerRef.current = null
     initCanvas(bgCanvasRef.current, "#60a5fa")
   }
 
   const resetRecording = () => {
     if (bgAudioElementRef.current) {
-      bgAudioElementRef.current.pause()
+      const bgAudio = bgAudioElementRef.current
+      if (bgTimeUpdateHandlerRef.current) {
+        bgAudio.removeEventListener("timeupdate", bgTimeUpdateHandlerRef.current)
+      }
+      if (bgLoadedMetadataHandlerRef.current) {
+        bgAudio.removeEventListener("loadedmetadata", bgLoadedMetadataHandlerRef.current)
+      }
+      bgAudio.pause()
       bgAudioElementRef.current = null
     }
     if (audioUrl) URL.revokeObjectURL(audioUrl)
@@ -510,6 +590,9 @@ export function AudioRecorder() {
     setRecordingState("idle")
     setDuration(0)
     setCurrentTime(0)
+    setBgCurrentTime(0)
+    bgTimeUpdateHandlerRef.current = null
+    bgLoadedMetadataHandlerRef.current = null
     setIsPlaying(false)
     setOutputExt("")
     pcmChunksRef.current = []
@@ -726,6 +809,18 @@ export function AudioRecorder() {
   }, [])
 
   useEffect(() => {
+    if (typeof window === "undefined") return
+    const prevBodyOverflow = document.body.style.overflow
+    const prevHtmlOverflow = document.documentElement.style.overflow
+    document.body.style.overflow = "hidden"
+    document.documentElement.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = prevBodyOverflow
+      document.documentElement.style.overflow = prevHtmlOverflow
+    }
+  }, [])
+
+  useEffect(() => {
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl)
       if (timerRef.current) clearInterval(timerRef.current)
@@ -734,34 +829,111 @@ export function AudioRecorder() {
     }
   }, [audioUrl])
 
+  const bgDur = Number.isFinite(bgDuration) && bgDuration > 0 ? bgDuration : 0
+  const bgPos = recordingState === "recording" ? bgCurrentTime : bgDur > 0 ? currentTime % bgDur : 0
+  const bgProgressPercent = bgDur > 0 ? (bgPos / bgDur) * 100 : 0
+  const bgProgressPercentClamped = Math.max(0, Math.min(100, bgProgressPercent))
+
+  const shareWithTimeout = async (fn: () => Promise<void>, timeoutMs: number) => {
+    let timeoutId: number | null = null
+    try {
+      await Promise.race([
+        fn(),
+        new Promise<void>((_, reject) => {
+          timeoutId = window.setTimeout(() => reject(new Error("share timeout")), timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timeoutId) window.clearTimeout(timeoutId)
+    }
+  }
+
+  const shareRecording = async () => {
+    if (!audioUrl || !audioBlobRef.current) return
+    if (typeof navigator === "undefined") return
+    const blob = audioBlobRef.current
+
+    const safeDate = new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-")
+    const ext = outputExt || (blob.type.includes("mp4") ? ".m4a" : ".webm")
+    const fileName = `录音_${safeDate}${ext}`
+
+    const fileType = blob.type || "application/octet-stream"
+    const file = new File([blob], fileName, { type: fileType })
+
+    const canUseShare = typeof (navigator as any).share === "function"
+    if (!canUseShare) {
+      // 没有分享能力就走下载兜底
+      downloadRecording()
+      return
+    }
+
+    try {
+      const navigatorAny = navigator as any
+      // 首选：带文件分享
+      if (navigatorAny.canShare && !navigatorAny.canShare({ files: [file] })) {
+        // 不支持文件分享则退而求其次分享 URL
+        const urlShareData: any = { url: audioUrl, title: fileName }
+        await shareWithTimeout(() => navigatorAny.share(urlShareData), 10000)
+        return
+      }
+
+      const shareData: any = {
+        files: [file],
+        title: fileName,
+        text: "录音分享",
+      }
+      await shareWithTimeout(() => navigatorAny.share(shareData), 10000)
+    } catch {
+      // 分享失败：回退下载，避免用户无操作
+      downloadRecording()
+    }
+  }
+
   return (
-    <div className="w-full max-w-3xl mx-auto p-4">
-      <Card className="bg-card border-border p-4 md:p-5">
+    <div className="w-full max-w-3xl mx-auto p-1 h-[calc(100dvh-48px)] flex flex-col md:justify-center overflow-hidden">
+      {/* 全屏左上角版本号 */}
+      <div className="fixed top-2 left-2 z-50 text-xs text-muted-foreground border border-border rounded px-2 py-0.5 bg-background/70 backdrop-blur">
+        v{APP_VERSION}
+      </div>
+      <Card className="bg-card border-border p-1 md:p-5 flex-1 md:flex-none min-h-0 flex flex-col overflow-hidden">
         {/* 标题行 */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-1 md:mb-4">
           <div className="flex items-center gap-2">
             <Volume2 className="w-5 h-5 text-primary" />
             <h1 className="text-lg font-bold text-foreground">在线录音</h1>
-            <span className="text-xs text-muted-foreground border border-border rounded px-2 py-0.5">
-              v{APP_VERSION}
-            </span>
           </div>
-          <span className="text-2xl font-mono text-primary tabular-nums">
-            {recordingState === "stopped" && audioUrl
-              ? `${formatTime(currentTime)} / ${formatTime(duration)}`
-              : formatTime(duration)}
-          </span>
+          <div className="flex items-start gap-2">
+            <span className="hidden md:inline text-2xl font-mono text-primary tabular-nums">
+              {recordingState === "stopped" && audioUrl
+                ? `${formatTime(currentTime)} / ${formatTime(duration)}`
+                : formatTime(duration)}
+            </span>
+            {/* 移动端：耳机模式放到右上角 */}
+            <div className="md:hidden flex items-center gap-3">
+              <Headphones className="w-4 h-4 text-primary" />
+              <div className="flex items-center gap-1.5">
+                <Label className="text-sm">耳机模式</Label>
+              </div>
+              <Switch
+                checked={isHeadphoneMode}
+                onCheckedChange={setIsHeadphoneMode}
+                disabled={recordingState === "recording"}
+                aria-label="耳机模式"
+                className="data-[state=unchecked]:border-border data-[state=unchecked]:bg-zinc-600 data-[state=checked]:border-transparent dark:data-[state=unchecked]:bg-zinc-700"
+              />
+            </div>
+          </div>
         </div>
 
         {/* 三条波形 */}
-        <div className="grid grid-cols-1 gap-2 mb-4">
+        <div className="flex flex-col gap-0.5 mb-0 md:mb-4 flex-1 min-h-0 md:flex-none">
           {/* 麦克风波形 */}
-          <div className="relative rounded overflow-hidden border border-border bg-secondary/30">
+          <div className="relative rounded overflow-hidden border border-border bg-secondary/30 flex-1 min-h-0 md:flex-none md:h-[50px]">
             <div className="absolute top-1 left-2 flex items-center gap-1 text-xs text-pink-400">
               <Mic className="w-3 h-3" />
               <span>麦克风</span>
             </div>
-            <canvas ref={micCanvasRef} width={700} height={50} className="w-full h-[50px]" />
+            <canvas ref={micCanvasRef} width={700} height={96} className="block w-full h-full md:h-[50px]" />
             {recordingState === "recording" && (
               <span className="absolute top-1 right-2 w-2 h-2 bg-pink-500 rounded-full animate-pulse" />
             )}
@@ -769,7 +941,7 @@ export function AudioRecorder() {
 
           {/* 背景音乐波形 */}
           <div
-            className="relative rounded overflow-hidden border border-border bg-secondary/30"
+            className="relative flex flex-col rounded overflow-hidden border border-border bg-secondary/30 flex-1 min-h-0 md:flex-none md:h-[110px]"
             onDragEnter={(e) => {
               if (recordingState === "recording" || isConverting) return
               e.preventDefault()
@@ -797,37 +969,117 @@ export function AudioRecorder() {
               if (!file) return
               await handleBgMusicFile(file)
             }}
+            onClick={(e) => {
+              if (recordingState === "recording" || isConverting) return
+              // 防止点击内部按钮时同时触发外层 onClick，导致文件选择器弹出两次
+              const target = e.target as HTMLElement | null
+              if (target?.closest("button")) return
+              bgFileInputRef.current?.click()
+            }}
           >
-            <div className="absolute top-1 left-2 flex items-center gap-1 text-xs text-blue-400">
-              <Music className="w-3 h-3" />
-              <span>背景音乐</span>
+            {/* 波形独占上方区域，避免与底部元数据/控件在同一画布上重叠 */}
+            <div className="relative flex-1 min-h-0 w-full flex flex-col">
+              <div className="absolute top-1 left-2 z-10 flex items-center gap-1 text-xs text-blue-400 pointer-events-none">
+                <Music className="w-3 h-3" />
+                <span>背景音乐</span>
+              </div>
+              {bgMusicFile && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    removeBgMusic()
+                  }}
+                  disabled={recordingState === "recording"}
+                  className="absolute top-1 right-2 z-10 text-[11px] px-1.5 py-0.5 rounded bg-background/70 backdrop-blur text-muted-foreground hover:text-destructive hover:bg-background disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  aria-label="移除背景音乐"
+                >
+                  移除
+                </button>
+              )}
+              <canvas ref={bgCanvasRef} width={700} height={96} className="block w-full flex-1 min-h-0 h-0" />
             </div>
-            <canvas ref={bgCanvasRef} width={700} height={50} className="w-full h-[50px]" />
+
             {isBgDropActive && (
-              <div className="absolute inset-0 bg-blue-500/15 border-2 border-blue-400 flex items-center justify-center text-xs text-blue-200 pointer-events-none">
+              <div className="absolute inset-0 z-20 bg-blue-500/15 border-2 border-blue-400 flex items-center justify-center text-xs text-blue-200 pointer-events-none">
                 放开以添加/替换背景音乐
               </div>
             )}
+
             {!bgMusicFile && (
-              <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-                拖入音频文件添加背景音乐
+              <div className="absolute inset-0 z-[15] flex items-center justify-center text-xs text-muted-foreground">
+                <span>
+                  拖入音频文件或者
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      bgFileInputRef.current?.click()
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    disabled={recordingState === "recording" || isConverting}
+                    className="ml-1 underline underline-offset-2 text-blue-400 hover:text-blue-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    点击这里
+                  </button>
+                  添加背景音乐
+                </span>
+              </div>
+            )}
+
+            {bgMusicFile && (
+              <div className="relative z-10 shrink-0 w-full px-2 pb-1 pt-0.5 border-t border-border/50 bg-secondary/40">
+                <div className="flex items-center justify-between gap-2 min-w-0 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-1 min-w-0">
+                    <Music className="w-3 h-3 text-blue-400 shrink-0" />
+                    <span className="truncate max-w-[130px] text-foreground">{bgMusicFile.name}</span>
+                  </div>
+                  <span className="font-mono tabular-nums shrink-0 text-right">
+                    {bgDur > 0 ? `${formatTime(bgPos)} / ${formatTime(bgDur)}` : "--:-- / --:--"}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <Volume2 className="w-3 h-3 text-blue-400 shrink-0" />
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={bgVolume}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      setBgVolume(v)
+                      if (bgGainNodeRef.current) bgGainNodeRef.current.gain.value = v
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full accent-blue-400 cursor-pointer"
+                    aria-label="背景音量"
+                  />
+                  <span className="w-8 text-right">{Math.round(bgVolume * 100)}%</span>
+                </div>
+                <div className="relative mt-1 h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                  <div
+                    className="absolute left-0 top-0 h-full bg-blue-500"
+                    style={{ width: `${bgProgressPercentClamped}%` }}
+                  />
+                </div>
               </div>
             )}
           </div>
 
           {/* 混合波形 */}
-          <div className="relative rounded overflow-hidden border border-border bg-secondary/30">
+          <div className="relative rounded overflow-hidden border border-border bg-secondary/30 flex-1 min-h-0 md:flex-none md:h-[50px]">
             <div className="absolute top-1 left-2 flex items-center gap-1 text-xs text-green-400">
               <Volume2 className="w-3 h-3" />
               <span>{isHeadphoneMode ? "混合输出" : "录音输出"}</span>
             </div>
-            <canvas ref={mixCanvasRef} width={700} height={50} className="w-full h-[50px]" />
+            <canvas ref={mixCanvasRef} width={700} height={96} className="block w-full h-full md:h-[50px]" />
           </div>
         </div>
 
         {/* 播放进度条 */}
         {recordingState === "stopped" && audioUrl && (
-          <div className="mb-4">
+          <div className="mb-1 md:mb-4">
             <div className="relative h-1.5 bg-secondary rounded-full overflow-hidden">
               <div
                 ref={progressFillRef}
@@ -874,9 +1126,13 @@ export function AudioRecorder() {
           </div>
         )}
 
-        {/* 控制区：按钮 + 背景音乐 */}
-        <div className="flex flex-wrap items-center gap-3">
-          {/* 主控制按钮 */}
+        {/* 移动端：时间 + 开始/停止按钮独立一行 */}
+        <div className="md:hidden mb-1 flex flex-col items-center gap-1">
+          <span className="text-2xl font-mono text-primary tabular-nums">
+            {recordingState === "stopped" && audioUrl
+              ? `${formatTime(currentTime)} / ${formatTime(duration)}`
+              : formatTime(duration)}
+          </span>
           {recordingState === "idle" && (
             <Button onClick={startRecording} className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground">
               <Mic className="w-4 h-4" />
@@ -889,99 +1145,98 @@ export function AudioRecorder() {
               停止
             </Button>
           )}
+        </div>
+
+        {/* 控制区：按钮 + 背景音乐 */}
+        <div className="flex flex-nowrap md:flex-wrap items-center gap-2">
+          {/* 主控制按钮 */}
+          {recordingState === "idle" && (
+            <Button onClick={startRecording} className="hidden md:inline-flex gap-2 bg-primary hover:bg-primary/90 text-primary-foreground">
+              <Mic className="w-4 h-4" />
+              开始录制
+            </Button>
+          )}
+          {recordingState === "recording" && (
+            <Button onClick={stopRecording} variant="destructive" className="hidden md:inline-flex gap-2">
+              <Square className="w-4 h-4" />
+              停止
+            </Button>
+          )}
           {recordingState === "stopped" && audioUrl && (
-            <>
-              <Button onClick={togglePlayback} variant="secondary" className="gap-2">
+            <div className="w-full flex items-center gap-2 flex-nowrap">
+              {/* 播放 */}
+              <Button
+                onClick={togglePlayback}
+                variant="secondary"
+                className="flex-1 min-w-0 flex-col gap-1 justify-center items-center px-2 text-xs h-[60px] min-h-[60px] py-0 border border-border bg-secondary shadow-sm hover:bg-secondary/90 md:flex-row md:gap-2 md:h-9 md:min-h-9 md:justify-center md:items-center"
+              >
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 {isPlaying ? "暂停" : "播放"}
               </Button>
+
+              {/* 重录 */}
               <Button
-                onClick={downloadRecording}
-                disabled={isConverting}
-                className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
+                onClick={resetRecording}
+                variant="secondary"
+                className="flex-1 min-w-0 flex-col gap-1 justify-center items-center px-2 text-xs h-[60px] min-h-[60px] py-0 border border-border bg-secondary shadow-sm hover:bg-secondary/90 md:flex-row md:gap-2 md:h-9 md:min-h-9 md:justify-center md:items-center"
               >
-                {isConverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                {outputExt === ".m4a" ? "下载 M4A" : "下载录音"}
-              </Button>
-              <Button onClick={resetRecording} variant="outline" className="gap-2">
                 <RotateCcw className="w-4 h-4" />
                 重录
               </Button>
-            </>
+
+              {/* 分享：移动端 icon 在上、文字在下 */}
+              <Button
+                onClick={shareRecording}
+                variant="secondary"
+                className="flex-1 min-w-0 md:hidden flex-col gap-1 justify-center items-center px-2 text-xs h-[60px] min-h-[60px] py-0 border border-border bg-secondary shadow-sm hover:bg-secondary/90"
+                disabled={isConverting}
+              >
+                <Share2 className="w-4 h-4" />
+                分享
+              </Button>
+
+              {/* 下载 */}
+              <Button
+                onClick={downloadRecording}
+                disabled={isConverting}
+                variant="secondary"
+                className="flex-1 min-w-0 flex-col gap-1 justify-center items-center px-2 text-xs h-[60px] min-h-[60px] py-0 border border-border bg-secondary shadow-sm hover:bg-secondary/90 md:flex-row md:gap-2 md:h-9 md:min-h-9 md:justify-center md:items-center"
+              >
+                {isConverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                {outputExt === ".m4a" ? (
+                  <>
+                    <span className="hidden md:inline">下载 M4A</span>
+                    <span className="md:hidden">下载</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="hidden md:inline">下载录音</span>
+                    <span className="md:hidden">下载</span>
+                  </>
+                )}
+              </Button>
+            </div>
           )}
 
           {/* 分隔线 */}
           <div className="hidden sm:block w-px h-8 bg-border" />
 
-          {/* 耳机模式 */}
-          <div className="flex items-center gap-3 px-2 py-1 rounded-md border border-border bg-secondary/30">
+          {/* 耳机模式（桌面端保留原位置） */}
+          <div className="hidden md:flex items-center gap-3">
             <Headphones className="w-4 h-4 text-primary" />
             <div className="flex items-center gap-1.5">
               <Label className="text-sm">耳机模式</Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    className="inline-flex rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                    aria-label="耳机模式说明"
-                  >
-                    <CircleHelp className="size-3.5 shrink-0" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-balance">
-                  开：数字混音 · 关：不混音
-                </TooltipContent>
-              </Tooltip>
             </div>
             <Switch
               checked={isHeadphoneMode}
               onCheckedChange={setIsHeadphoneMode}
               disabled={recordingState === "recording"}
               aria-label="耳机模式"
+              className="data-[state=unchecked]:border-border data-[state=unchecked]:bg-zinc-600 data-[state=checked]:border-transparent dark:data-[state=unchecked]:bg-zinc-700"
             />
           </div>
 
-          {/* 背景音乐上传 */}
-          {!bgMusicFile ? (
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={() => bgFileInputRef.current?.click()}
-              disabled={recordingState === "recording" || isConverting}
-            >
-              {isConverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Music className="w-4 h-4" />}
-              添加背景音乐
-            </Button>
-          ) : (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-secondary/40 text-sm">
-              <Music className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-              <span className="max-w-[100px] truncate text-foreground">{bgMusicFile.name}</span>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={bgVolume}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value)
-                  setBgVolume(v)
-                  if (bgGainNodeRef.current) bgGainNodeRef.current.gain.value = v
-                }}
-                className="w-14 accent-blue-400 cursor-pointer"
-                aria-label="背景音量"
-              />
-              <span className="text-xs text-muted-foreground w-6">{Math.round(bgVolume * 100)}%</span>
-              <button
-                type="button"
-                onClick={removeBgMusic}
-                disabled={recordingState === "recording"}
-                className="text-muted-foreground hover:text-destructive transition-colors disabled:opacity-40"
-                aria-label="移除"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          {/* 背景音乐上传入口已合并到背景音乐波形区域 */}
           <input
             ref={bgFileInputRef}
             type="file"
@@ -991,12 +1246,9 @@ export function AudioRecorder() {
           />
         </div>
 
-        {audioUrl && <audio ref={audioRef} src={audioUrl} />}
+        {audioUrl && <audio ref={audioRef} src={audioUrl} className="hidden" />}
       </Card>
 
-      <p className="mt-3 text-center text-xs text-muted-foreground">
-        录音优先导出 M4A；否则将 PCM 编码为 MP3（无 PCM 时下载 WebM）。背景音乐支持 MP3、WAV、OGG、WebM、M4A、AAC，可拖拽添加。
-      </p>
     </div>
   )
 }
