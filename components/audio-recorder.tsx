@@ -3,7 +3,13 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2, Music, X, Loader2 } from "lucide-react"
+import { Mic, Square, Play, Pause, Download, RotateCcw, Volume2, Music, X, Loader2, Headphones, CircleHelp } from "lucide-react"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import packageJson from "@/package.json"
+
+const APP_VERSION = (packageJson as { version?: string }).version ?? "unknown"
 
 type RecordingState = "idle" | "recording" | "stopped"
 
@@ -13,11 +19,19 @@ export function AudioRecorder() {
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isHeadphoneMode, setIsHeadphoneMode] = useState(false)
+  const isSeekingRef = useRef(false)
   const [bgMusicFile, setBgMusicFile] = useState<File | null>(null)
   const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null)
   const [bgVolume, setBgVolume] = useState(0.5)
+  const [isBgDropActive, setIsBgDropActive] = useState(false)
   const [isConverting, setIsConverting] = useState(false)
   const [ffmpegLoaded, setFfmpegLoaded] = useState(false)
+  const [outputExt, setOutputExt] = useState<string>("") // ".m4a" / ".webm"
+
+  const canRecordM4a =
+    typeof MediaRecorder !== "undefined" &&
+    (MediaRecorder.isTypeSupported("audio/mp4;codecs=mp4a.40.2") || MediaRecorder.isTypeSupported("audio/mp4"))
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
@@ -35,12 +49,28 @@ export function AudioRecorder() {
   const micHistoryRef = useRef<number[]>([])
   const bgHistoryRef = useRef<number[]>([])
   const mixHistoryRef = useRef<number[]>([])
+  const replayRafIdRef = useRef<number | null>(null)
+  const progressFillRef = useRef<HTMLDivElement | null>(null)
+  // Live: 录制时用于实时绘制的滑动窗口（有限长度，避免实时绘制越来越慢）
+  const micAllHistoryRef = useRef<number[]>([])
+  const bgAllHistoryRef = useRef<number[]>([])
+  const mixAllHistoryRef = useRef<number[]>([])
+  // Replay: 回放时展示“完整录音”的波形（在 stopRecording 时从 AllHistory 采样生成）
+  const micReplayHistoryRef = useRef<number[]>([])
+  const bgReplayHistoryRef = useRef<number[]>([])
+  const mixReplayHistoryRef = useRef<number[]>([])
   const bgAudioElementRef = useRef<HTMLAudioElement | null>(null)
   const bgGainNodeRef = useRef<GainNode | null>(null)
   const bgFileInputRef = useRef<HTMLInputElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ffmpegRef = useRef<any>(null)
   const audioBlobRef = useRef<Blob | null>(null)
+  // 录音期间的 PCM 缓存（用于后续转码/分析）
+  const pcmChunksRef = useRef<Float32Array[]>([])
+  const pcmSampleRateRef = useRef<number>(0)
+  const pcmCaptureNodeRef = useRef<ScriptProcessorNode | null>(null)
+  const pcmSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const pcmZeroGainRef = useRef<GainNode | null>(null)
 
   const HISTORY_MAX = 600
 
@@ -49,24 +79,90 @@ export function AudioRecorder() {
     if (ffmpegLoaded || ffmpegRef.current) return
     try {
       const { FFmpeg } = await import("@ffmpeg/ffmpeg")
-      const { toBlobURL } = await import("@ffmpeg/util")
       const ffmpeg = new FFmpeg()
       ffmpegRef.current = ffmpeg
-      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.9/dist/esm"
-      await ffmpeg.load({
-        classWorkerURL: `${window.location.origin}/ffmpeg/worker.js`,
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-      })
+
+      const CORE_VERSION = "0.12.9"
+      const origin = window.location.origin
+      const cacheBust = Date.now().toString()
+      // 优先从本项目 public 目录加载，避免每次都从 unpkg 拉 wasm。
+      const localCoreURL = `${origin}/ffmpeg/ffmpeg-core.js?v=${cacheBust}`
+      const localWasmURL = `${origin}/ffmpeg/ffmpeg-core.wasm?v=${cacheBust}`
+
+      const assetExists = async (url: string) => {
+        // 本地 assets 应同源，HEAD 应该很快；若不支持则用 Range 做轻量探测。
+        const timeoutMs = 4000
+        const controller = new AbortController()
+        const t = window.setTimeout(() => controller.abort(), timeoutMs)
+        try {
+          const res = await fetch(url, { method: "HEAD", cache: "force-cache", signal: controller.signal })
+          if (res.ok) return true
+        } catch {
+          // ignore and fallback to range probe below
+        } finally {
+          window.clearTimeout(t)
+        }
+
+        // Fallback: range 探测，避免下载整个 wasm
+        const controller2 = new AbortController()
+        const t2 = window.setTimeout(() => controller2.abort(), timeoutMs)
+        try {
+          const res = await fetch(url, {
+            method: "GET",
+            headers: { Range: "bytes=0-0" },
+            cache: "force-cache",
+            signal: controller2.signal,
+          })
+          // GET + Range 成功通常是 206；部分服务也可能返回 200（小响应）。
+          return res.status === 206 || res.status === 200
+        } catch {
+          return false
+        } finally {
+          window.clearTimeout(t2)
+        }
+      }
+
+      const loadFromRemote = async () => {
+        const { toBlobURL } = await import("@ffmpeg/util")
+        // 跟最初的实现保持一致：优先使用 ESM 构建（支持 import() 默认导出）。
+        const baseURL = `https://unpkg.com/@ffmpeg/core@${CORE_VERSION}/dist/esm`
+        await ffmpeg.load({
+          classWorkerURL: `${origin}/ffmpeg/worker.js`,
+          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+        })
+      }
+
+      if ((await assetExists(localWasmURL)) && (await assetExists(localCoreURL))) {
+        try {
+          console.info("FFmpeg: using local ffmpeg-core", { localCoreURL, localWasmURL })
+
+          // 用 Blob URL 让 wasm/js 的 MIME 与 core 期望更一致，避免本地加载时的边界问题。
+          const { toBlobURL } = await import("@ffmpeg/util")
+          const localCoreBlobURL = await toBlobURL(localCoreURL, "text/javascript")
+          const localWasmBlobURL = await toBlobURL(localWasmURL, "application/wasm")
+
+          await ffmpeg.load({
+            classWorkerURL: `${origin}/ffmpeg/worker.js`,
+            coreURL: localCoreBlobURL,
+            wasmURL: localWasmBlobURL,
+          })
+        } catch (localErr) {
+          console.warn("Local ffmpeg-core 加载失败，回退到 CDN：", localErr)
+          await loadFromRemote()
+        }
+      } else {
+        console.warn("FFmpeg: local ffmpeg-core not found, falling back to CDN", {
+          localCoreURL,
+          localWasmURL,
+        })
+        await loadFromRemote()
+      }
       setFfmpegLoaded(true)
     } catch (err) {
       console.error("FFmpeg 加载失败:", err)
     }
   }, [ffmpegLoaded])
-
-  useEffect(() => {
-    loadFfmpeg()
-  }, [loadFfmpeg])
 
   const getPeak = (analyser: AnalyserNode) => {
     const bufferLength = analyser.fftSize
@@ -80,11 +176,29 @@ export function AudioRecorder() {
     return peak
   }
 
+  const resamplePeaks = (peaks: number[], targetPoints: number) => {
+    if (targetPoints <= 0) return []
+    if (peaks.length === 0) return []
+    if (peaks.length <= targetPoints) return peaks.slice()
+
+    // 将原始 peaks 按区间聚合（取每个 bin 的最大值），以最大限度保留尖峰信息。
+    const out = new Array<number>(targetPoints).fill(0)
+    for (let i = 0; i < targetPoints; i++) {
+      const start = Math.floor((i * peaks.length) / targetPoints)
+      const end = Math.floor(((i + 1) * peaks.length) / targetPoints)
+      let m = 0
+      for (let j = start; j < end && j < peaks.length; j++) m = Math.max(m, peaks[j])
+      out[i] = m
+    }
+    return out
+  }
+
   const drawSingleWave = (
     canvas: HTMLCanvasElement,
     history: number[],
     color: string,
-    glowColor: string
+    glowColor: string,
+    cursorRatio: number
   ) => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return
@@ -103,59 +217,63 @@ export function AudioRecorder() {
     ctx.lineTo(w, cx)
     ctx.stroke()
 
-    if (history.length < 2) return
+    if (history.length >= 2) {
+      // 填充
+      ctx.beginPath()
+      for (let i = 0; i < history.length; i++) {
+        const x = history.length <= 1 ? 0 : (i / (history.length - 1)) * w
+        const y = cx - history[i] * cx * 0.85
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      for (let i = history.length - 1; i >= 0; i--) {
+        const x = history.length <= 1 ? 0 : (i / (history.length - 1)) * w
+        const y = cx + history[i] * cx * 0.85
+        ctx.lineTo(x, y)
+      }
+      ctx.closePath()
+      const grad = ctx.createLinearGradient(0, 0, 0, h)
+      grad.addColorStop(0, `${color}66`)
+      grad.addColorStop(0.5, `${color}22`)
+      grad.addColorStop(1, `${color}66`)
+      ctx.fillStyle = grad
+      ctx.fill()
 
-    // 填充
-    ctx.beginPath()
-    for (let i = 0; i < history.length; i++) {
-      const x = (i / HISTORY_MAX) * w
-      const y = cx - history[i] * cx * 0.85
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    for (let i = history.length - 1; i >= 0; i--) {
-      const x = (i / HISTORY_MAX) * w
-      const y = cx + history[i] * cx * 0.85
-      ctx.lineTo(x, y)
-    }
-    ctx.closePath()
-    const grad = ctx.createLinearGradient(0, 0, 0, h)
-    grad.addColorStop(0, `${color}66`)
-    grad.addColorStop(0.5, `${color}22`)
-    grad.addColorStop(1, `${color}66`)
-    ctx.fillStyle = grad
-    ctx.fill()
+      // 描边
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.5
+      ctx.shadowColor = glowColor
+      ctx.shadowBlur = 4
 
-    // 描边
-    ctx.strokeStyle = color
-    ctx.lineWidth = 1.5
-    ctx.shadowColor = glowColor
-    ctx.shadowBlur = 4
-    ctx.beginPath()
-    for (let i = 0; i < history.length; i++) {
-      const x = (i / HISTORY_MAX) * w
-      const y = cx - history[i] * cx * 0.85
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
-    ctx.beginPath()
-    for (let i = 0; i < history.length; i++) {
-      const x = (i / HISTORY_MAX) * w
-      const y = cx + history[i] * cx * 0.85
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
-    ctx.shadowBlur = 0
+      ctx.beginPath()
+      for (let i = 0; i < history.length; i++) {
+        const x = history.length <= 1 ? 0 : (i / (history.length - 1)) * w
+        const y = cx - history[i] * cx * 0.85
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
 
-    // 游标
-    const curX = (history.length / HISTORY_MAX) * w
+      ctx.beginPath()
+      for (let i = 0; i < history.length; i++) {
+        const x = history.length <= 1 ? 0 : (i / (history.length - 1)) * w
+        const y = cx + history[i] * cx * 0.85
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+
+      ctx.shadowBlur = 0
+    }
+
+    // 游标：始终绘制（即使 history 还很短/为空也要显示播放位置）
+    const ratio = Number.isFinite(cursorRatio) ? cursorRatio : 0
+    const cursorX = Math.max(0, Math.min(1, ratio)) * w
     ctx.strokeStyle = `${color}99`
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(curX, 0)
-    ctx.lineTo(curX, h)
+    ctx.moveTo(cursorX, 0)
+    ctx.lineTo(cursorX, h)
     ctx.stroke()
   }
 
@@ -169,27 +287,33 @@ export function AudioRecorder() {
         const peak = getPeak(micAnalyserRef.current)
         micHistoryRef.current.push(peak)
         if (micHistoryRef.current.length > HISTORY_MAX) micHistoryRef.current.shift()
+        micAllHistoryRef.current.push(peak)
       }
       if (bgAnalyserRef.current) {
         const peak = getPeak(bgAnalyserRef.current)
         bgHistoryRef.current.push(peak)
         if (bgHistoryRef.current.length > HISTORY_MAX) bgHistoryRef.current.shift()
+        bgAllHistoryRef.current.push(peak)
       }
       if (mixAnalyserRef.current) {
         const peak = getPeak(mixAnalyserRef.current)
         mixHistoryRef.current.push(peak)
         if (mixHistoryRef.current.length > HISTORY_MAX) mixHistoryRef.current.shift()
+        mixAllHistoryRef.current.push(peak)
       }
 
       // 绘制
       if (micCanvasRef.current) {
-        drawSingleWave(micCanvasRef.current, micHistoryRef.current, "#f472b6", "#ec4899")
+        const cursorRatio = Math.min(1, micHistoryRef.current.length / HISTORY_MAX)
+        drawSingleWave(micCanvasRef.current, micHistoryRef.current, "#f472b6", "#ec4899", cursorRatio)
       }
       if (bgCanvasRef.current && bgMusicUrl) {
-        drawSingleWave(bgCanvasRef.current, bgHistoryRef.current, "#60a5fa", "#3b82f6")
+        const cursorRatio = Math.min(1, bgHistoryRef.current.length / HISTORY_MAX)
+        drawSingleWave(bgCanvasRef.current, bgHistoryRef.current, "#60a5fa", "#3b82f6", cursorRatio)
       }
       if (mixCanvasRef.current) {
-        drawSingleWave(mixCanvasRef.current, mixHistoryRef.current, "#4ade80", "#22c55e")
+        const cursorRatio = Math.min(1, mixHistoryRef.current.length / HISTORY_MAX)
+        drawSingleWave(mixCanvasRef.current, mixHistoryRef.current, "#4ade80", "#22c55e", cursorRatio)
       }
     }
     draw()
@@ -211,14 +335,28 @@ export function AudioRecorder() {
 
   const startRecording = async () => {
     try {
+      const desiredSampleRate = 48000
+      const echoCancellation = false
+      const autoGainControl = true
+      const noiseSuppression = false
+
       const micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
+          echoCancellation,
+          autoGainControl,
+          noiseSuppression,
+          sampleRate: desiredSampleRate,
         },
       })
-      const audioCtx = new AudioContext()
+
+      // 尽量让 WebAudio 的内部采样率与目标一致
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext
+      let audioCtx: AudioContext
+      try {
+        audioCtx = new AudioContextCtor({ sampleRate: desiredSampleRate }) as AudioContext
+      } catch {
+        audioCtx = new AudioContextCtor() as AudioContext
+      }
       audioContextRef.current = audioCtx
       // AudioContext may start in 'suspended' state when created after an async
       // await (e.g. getUserMedia) — even inside a user-gesture handler.
@@ -265,14 +403,21 @@ export function AudioRecorder() {
 
         bgSource.connect(gainNode)
         gainNode.connect(bgAnalyser)
-        gainNode.connect(mixAnalyser)           // 音乐 → 混音显示
-        gainNode.connect(destination)           // 音乐数字信号直接混入录音
-        gainNode.connect(audioCtx.destination)  // 音乐通过耳机播放给用户
 
-        // 卡拉OK场景使用耳机：麦克风只采集人声（耳机防止音乐漏入麦克风），
-        // 无需回声消除，直接将人声混入录音。最终录音 = 人声 + 音乐（数字混音）。
-        micSource.connect(destination)          // 人声直接混入录音
-        micSource.connect(mixAnalyser)          // 人声 → 混音显示
+        // 背景音乐：始终播放到用户耳机/扬声器；“数字混音进录音”仅在耳机模式开启（麦克风采不到音乐时）。
+        gainNode.connect(audioCtx.destination) // 音乐通过音频设备播放给用户
+
+        if (isHeadphoneMode) {
+          // 耳机模式：麦克风采不到音乐 → 数字混音进录音
+          gainNode.connect(mixAnalyser)
+          gainNode.connect(destination)
+          micSource.connect(destination)
+          micSource.connect(mixAnalyser)
+        } else {
+          // 外放：麦克风会采到音乐 → 录音只接麦克风，不数字混音
+          micSource.connect(destination)
+          micSource.connect(mixAnalyser)
+        }
 
         bgAudio.play()
       } else {
@@ -281,25 +426,72 @@ export function AudioRecorder() {
         micSource.connect(mixAnalyser)
       }
 
+      // PCM 采集：保存混音后的完整 PCM（Float32，单声道）
+      // 后续如果要“PCM -> mp3/m4a”，可以直接用这里的缓存。
+      pcmChunksRef.current = []
+      pcmSampleRateRef.current = audioCtx.sampleRate
+      try {
+        const pcmSource = audioCtx.createMediaStreamSource(destination.stream)
+        // 用 ScriptProcessorNode 采集最简实现（不引入 audio worklet 复杂度）。
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1)
+        const zeroGain = audioCtx.createGain()
+        zeroGain.gain.value = 0
+
+        pcmSource.connect(processor)
+        processor.connect(zeroGain)
+        zeroGain.connect(audioCtx.destination) // 必须接到 destination 才会持续触发回调
+
+        processor.onaudioprocess = (ev) => {
+          const channelData = ev.inputBuffer.getChannelData(0)
+          // 拷贝一份，避免后续 buffer 复用导致数据被覆盖
+          pcmChunksRef.current.push(new Float32Array(channelData))
+        }
+
+        pcmSourceNodeRef.current = pcmSource
+        pcmCaptureNodeRef.current = processor
+        pcmZeroGainRef.current = zeroGain
+      } catch (e) {
+        console.warn("PCM 采集失败（不影响录音导出）:", e)
+      }
+
       // 清空
       audioChunksRef.current = []
       micHistoryRef.current = []
       bgHistoryRef.current = []
       mixHistoryRef.current = []
+      micAllHistoryRef.current = []
+      bgAllHistoryRef.current = []
+      mixAllHistoryRef.current = []
+      micReplayHistoryRef.current = []
+      bgReplayHistoryRef.current = []
+      mixReplayHistoryRef.current = []
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl)
         setAudioUrl(null)
       }
 
-      const mediaRecorder = new MediaRecorder(destination.stream)
+      // 优先录成 m4a（AAC），避免 ffmpeg 转码开销。
+      // 不支持时再退回 webm。
+      const preferredMimeTypes = canRecordM4a
+        ? ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
+        : ["audio/webm;codecs=opus", "audio/webm"]
+      const mimeType = preferredMimeTypes.find((t) => MediaRecorder.isTypeSupported(t))
+
+      const mediaRecorder = new MediaRecorder(destination.stream, {
+        ...(mimeType ? { mimeType } : {}),
+        audioBitsPerSecond: 192000, // mono 下通常足够高质量（仍受浏览器实现影响）
+      })
       mediaRecorderRef.current = mediaRecorder
+      const recordedMimeType = mediaRecorder.mimeType || "audio/webm"
+      const nextExt = recordedMimeType && (recordedMimeType.includes("mp4") || recordedMimeType.includes("aac")) ? ".m4a" : ".webm"
+      setOutputExt(nextExt)
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunksRef.current.push(e.data)
       }
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" })
+        const blob = new Blob(audioChunksRef.current, { type: recordedMimeType })
         audioBlobRef.current = blob
         const url = URL.createObjectURL(blob)
         setAudioUrl(url)
@@ -331,17 +523,53 @@ export function AudioRecorder() {
       setRecordingState("stopped")
       if (timerRef.current) clearInterval(timerRef.current)
       if (animationRef.current) cancelAnimationFrame(animationRef.current)
+
+      // 停止 PCM 采集
+      if (pcmCaptureNodeRef.current) {
+        pcmCaptureNodeRef.current.disconnect()
+        pcmCaptureNodeRef.current.onaudioprocess = null
+        pcmCaptureNodeRef.current = null
+      }
+      if (pcmSourceNodeRef.current) {
+        pcmSourceNodeRef.current.disconnect()
+        pcmSourceNodeRef.current = null
+      }
+      if (pcmZeroGainRef.current) {
+        pcmZeroGainRef.current.disconnect()
+        pcmZeroGainRef.current = null
+      }
       if (audioContextRef.current) {
         audioContextRef.current.close()
         audioContextRef.current = null
       }
+
+      // 生成回放用的完整波形数据（压缩到画布宽度），并立刻重画。
+      const targetPoints = micCanvasRef.current?.width ?? 700
+      micReplayHistoryRef.current = resamplePeaks(micAllHistoryRef.current, targetPoints)
+      bgReplayHistoryRef.current = resamplePeaks(bgAllHistoryRef.current, targetPoints)
+      mixReplayHistoryRef.current = resamplePeaks(mixAllHistoryRef.current, targetPoints)
+
+      const cursorRatio = duration > 0 ? currentTime / duration : 0
+      if (micCanvasRef.current) {
+        drawSingleWave(micCanvasRef.current, micReplayHistoryRef.current, "#f472b6", "#ec4899", cursorRatio)
+      }
+      if (bgCanvasRef.current && bgMusicUrl) {
+        drawSingleWave(bgCanvasRef.current, bgReplayHistoryRef.current, "#60a5fa", "#3b82f6", cursorRatio)
+      }
+      if (mixCanvasRef.current) {
+        drawSingleWave(mixCanvasRef.current, mixReplayHistoryRef.current, "#4ade80", "#22c55e", cursorRatio)
+      }
     }
   }
 
-  const handleBgMusicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  const handleBgMusicFile = async (file: File) => {
+    const isSelectionDisabled = recordingState === "recording" || isConverting
+    if (isSelectionDisabled) return
+
+    // 允许拖拽时复用：始终以同一套逻辑完成“直接播放/FFmpeg 转换”
     if (bgMusicUrl) URL.revokeObjectURL(bgMusicUrl)
+    setIsConverting(false)
+    if (bgFileInputRef.current) bgFileInputRef.current.value = ""
 
     // 检查是否需要转换
     const supportedTypes = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/webm", "audio/mp4", "audio/aac"]
@@ -349,29 +577,39 @@ export function AudioRecorder() {
       const url = URL.createObjectURL(file)
       setBgMusicFile(file)
       setBgMusicUrl(url)
-    } else {
-      // 使用 FFmpeg 转换
+      return
+    }
+
+    // 使用 FFmpeg 转换
+    setIsConverting(true)
+    try {
       if (!ffmpegRef.current || !ffmpegLoaded) {
-        alert("FFmpeg 正在加载，请稍后再试")
-        return
+        await loadFfmpeg()
       }
-      setIsConverting(true)
-      try {
-        const { fetchFile } = await import("@ffmpeg/util")
-        const ffmpeg = ffmpegRef.current
-        await ffmpeg.writeFile("input", await fetchFile(file))
-        await ffmpeg.exec(["-i", "input", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
-        const data = await ffmpeg.readFile("output.mp3")
-        const blob = new Blob([data], { type: "audio/mpeg" })
-        const url = URL.createObjectURL(blob)
-        setBgMusicFile(new File([blob], file.name.replace(/\.[^.]+$/, ".mp3"), { type: "audio/mpeg" }))
-        setBgMusicUrl(url)
-      } catch (err) {
-        console.error("转换失败:", err)
-        alert("音频格式转换失败，请尝试其他文件")
+      if (!ffmpegRef.current || !ffmpegLoaded) {
+        throw new Error("FFmpeg 加载失败")
       }
+      const { fetchFile } = await import("@ffmpeg/util")
+      const ffmpeg = ffmpegRef.current
+      await ffmpeg.writeFile("input", await fetchFile(file))
+      await ffmpeg.exec(["-i", "input", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
+      const data = await ffmpeg.readFile("output.mp3")
+      const blob = new Blob([data], { type: "audio/mpeg" })
+      const url = URL.createObjectURL(blob)
+      setBgMusicFile(new File([blob], file.name.replace(/\.[^.]+$/, ".mp3"), { type: "audio/mpeg" }))
+      setBgMusicUrl(url)
+    } catch (err) {
+      console.error("转换失败:", err)
+      alert("音频格式转换失败，请尝试其他文件")
+    } finally {
       setIsConverting(false)
     }
+  }
+
+  const handleBgMusicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    await handleBgMusicFile(file)
   }
 
   const removeBgMusic = () => {
@@ -393,11 +631,20 @@ export function AudioRecorder() {
     setDuration(0)
     setCurrentTime(0)
     setIsPlaying(false)
+    setOutputExt("")
+    pcmChunksRef.current = []
+    pcmSampleRateRef.current = 0
     audioChunksRef.current = []
     isRecordingRef.current = false
     micHistoryRef.current = []
     bgHistoryRef.current = []
     mixHistoryRef.current = []
+    micAllHistoryRef.current = []
+    bgAllHistoryRef.current = []
+    mixAllHistoryRef.current = []
+    micReplayHistoryRef.current = []
+    bgReplayHistoryRef.current = []
+    mixReplayHistoryRef.current = []
     initCanvas(micCanvasRef.current, "#f472b6")
     initCanvas(bgCanvasRef.current, "#60a5fa")
     initCanvas(mixCanvasRef.current, "#4ade80")
@@ -410,16 +657,110 @@ export function AudioRecorder() {
     setIsPlaying(!isPlaying)
   }
 
+  const seekTo = (time: number) => {
+    const audio = audioRef.current
+    if (!audio) return
+    const dur = audio.duration
+    const safeDuration = Number.isFinite(dur) && dur > 0 ? dur : duration
+    if (!Number.isFinite(safeDuration) || safeDuration <= 0) return
+
+    const clamped = Math.max(0, Math.min(time, safeDuration))
+    audio.currentTime = clamped
+    setCurrentTime(clamped)
+  }
+
   const downloadRecording = async () => {
-    if (!audioBlobRef.current || !ffmpegRef.current || !ffmpegLoaded) return
+    if (!audioBlobRef.current) return
+
+    // 方案1：如果已经录成 m4a，直接导出，不需要 ffmpeg。
+    if (outputExt === ".m4a") {
+      try {
+        const url = URL.createObjectURL(audioBlobRef.current)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `录音_${new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-")}.m4a`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      } catch (err) {
+        console.error("m4a 导出失败:", err)
+        alert("M4A 导出失败")
+      }
+      return
+    }
+
+    // 兜底：如果浏览器不支持 m4a，就用前端编码库把 PCM 编码为 mp3。
+    const sampleRate = pcmSampleRateRef.current
+    const pcmChunks = pcmChunksRef.current
+    const hasPcm = Boolean(sampleRate && pcmChunks.length > 0)
+
     setIsConverting(true)
     try {
-      const { fetchFile } = await import("@ffmpeg/util")
-      const ffmpeg = ffmpegRef.current
-      await ffmpeg.writeFile("input.webm", await fetchFile(audioBlobRef.current))
-      await ffmpeg.exec(["-i", "input.webm", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
-      const data = await ffmpeg.readFile("output.mp3")
-      const blob = new Blob([data], { type: "audio/mpeg" })
+      if (!hasPcm) {
+        // 最后兜底：PCM 捕获失败时，退回使用 ffmpeg（会比较慢，但能确保功能可用）
+        if (!ffmpegRef.current || !ffmpegLoaded) await loadFfmpeg()
+        if (!ffmpegRef.current || !ffmpegLoaded) throw new Error("FFmpeg 加载失败")
+
+        const { fetchFile } = await import("@ffmpeg/util")
+        const ffmpeg = ffmpegRef.current
+        await ffmpeg.writeFile("input.webm", await fetchFile(audioBlobRef.current))
+        await ffmpeg.exec(["-i", "input.webm", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
+        const data = await ffmpeg.readFile("output.mp3")
+        const blob = new Blob([data], { type: "audio/mpeg" })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `录音_${new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-")}.mp3`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        return
+      }
+
+      const { Mp3Encoder } = await import("lamejs")
+      const encoder = new Mp3Encoder(1, sampleRate, 192)
+
+      const mp3Data: Uint8Array[] = []
+      const frameSize = 1152
+      let frame = new Int16Array(frameSize)
+      let framePos = 0
+
+      // 为避免长录音卡住 UI：每处理一段数据就让出线程。
+      let processedFrames = 0
+
+      for (const chunk of pcmChunks) {
+        for (let i = 0; i < chunk.length; i++) {
+          const f = chunk[i]
+          // Float32 PCM 通常在 [-1, 1]。超出则钳位，避免溢出。
+          const clamped = Math.max(-1, Math.min(1, Number.isFinite(f) ? f : 0))
+          // 负数用 32768，避免 -1 -> -32768 的对称性问题
+          frame[framePos] = clamped < 0 ? clamped * 32768 : clamped * 32767
+          framePos++
+
+          if (framePos === frameSize) {
+            const buf = encoder.encodeBuffer(frame)
+            if (buf && buf.length > 0) mp3Data.push(buf)
+            frame = new Int16Array(frameSize)
+            framePos = 0
+            processedFrames++
+            // 每编码一段时间就让出线程，避免长任务阻塞。
+            if (processedFrames % 50 === 0) await new Promise((r) => setTimeout(r, 0))
+          }
+        }
+      }
+
+      if (framePos > 0) {
+        const tail = frame.subarray(0, framePos)
+        const buf = encoder.encodeBuffer(tail)
+        if (buf && buf.length > 0) mp3Data.push(buf)
+      }
+
+      const flushBuf = encoder.flush()
+      if (flushBuf && flushBuf.length > 0) mp3Data.push(flushBuf)
+
+      const blob = new Blob(mp3Data, { type: "audio/mpeg" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
@@ -429,10 +770,11 @@ export function AudioRecorder() {
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      console.error("转换失败:", err)
+      console.error("PCM->MP3 编码失败:", err)
       alert("MP3 转换失败")
+    } finally {
+      setIsConverting(false)
     }
-    setIsConverting(false)
   }
 
   const formatTime = (s: number) => {
@@ -444,7 +786,10 @@ export function AudioRecorder() {
   useEffect(() => {
     if (audioRef.current) {
       const audio = audioRef.current
-      const onTimeUpdate = () => setCurrentTime(audio.currentTime)
+      const onTimeUpdate = () => {
+        if (isSeekingRef.current) return
+        setCurrentTime(audio.currentTime)
+      }
       const onEnded = () => {
         setIsPlaying(false)
         setCurrentTime(0)
@@ -462,6 +807,42 @@ export function AudioRecorder() {
       }
     }
   }, [audioUrl])
+
+  // 回放阶段：用 requestAnimationFrame 连续更新竖线位置 + 进度条宽度。
+  // 这样不会依赖 `timeupdate` 的节奏，视觉上更流畅。
+  useEffect(() => {
+    if (recordingState !== "stopped" || !audioUrl) return
+
+    const tick = () => {
+      const audio = audioRef.current
+      if (!audio) return
+
+      const dur = audio.duration && isFinite(audio.duration) && audio.duration > 0 ? audio.duration : duration
+      const t = audio.currentTime
+      const cursorRatio = dur > 0 ? t / dur : 0
+
+      if (micCanvasRef.current) {
+        drawSingleWave(micCanvasRef.current, micReplayHistoryRef.current, "#f472b6", "#ec4899", cursorRatio)
+      }
+      if (bgCanvasRef.current && bgMusicUrl) {
+        drawSingleWave(bgCanvasRef.current, bgReplayHistoryRef.current, "#60a5fa", "#3b82f6", cursorRatio)
+      }
+      if (mixCanvasRef.current) {
+        drawSingleWave(mixCanvasRef.current, mixReplayHistoryRef.current, "#4ade80", "#22c55e", cursorRatio)
+      }
+
+      if (progressFillRef.current) progressFillRef.current.style.width = `${Math.max(0, Math.min(1, cursorRatio)) * 100}%`
+
+      replayRafIdRef.current = window.requestAnimationFrame(tick)
+    }
+
+    replayRafIdRef.current = window.requestAnimationFrame(tick)
+
+    return () => {
+      if (replayRafIdRef.current != null) window.cancelAnimationFrame(replayRafIdRef.current)
+      replayRafIdRef.current = null
+    }
+  }, [recordingState, audioUrl, duration, bgMusicUrl])
 
   useEffect(() => {
     initCanvas(micCanvasRef.current, "#f472b6")
@@ -486,6 +867,9 @@ export function AudioRecorder() {
           <div className="flex items-center gap-2">
             <Volume2 className="w-5 h-5 text-primary" />
             <h1 className="text-lg font-bold text-foreground">在线录音</h1>
+            <span className="text-xs text-muted-foreground border border-border rounded px-2 py-0.5">
+              v{APP_VERSION}
+            </span>
           </div>
           <span className="text-2xl font-mono text-primary tabular-nums">
             {recordingState === "stopped" && audioUrl
@@ -509,15 +893,49 @@ export function AudioRecorder() {
           </div>
 
           {/* 背景音乐波形 */}
-          <div className="relative rounded overflow-hidden border border-border bg-secondary/30">
+          <div
+            className="relative rounded overflow-hidden border border-border bg-secondary/30"
+            onDragEnter={(e) => {
+              if (recordingState === "recording" || isConverting) return
+              e.preventDefault()
+              e.stopPropagation()
+              setIsBgDropActive(true)
+            }}
+            onDragOver={(e) => {
+              if (recordingState === "recording" || isConverting) return
+              e.preventDefault()
+              e.stopPropagation()
+              e.dataTransfer.dropEffect = "copy"
+              setIsBgDropActive(true)
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setIsBgDropActive(false)
+            }}
+            onDrop={async (e) => {
+              if (recordingState === "recording" || isConverting) return
+              e.preventDefault()
+              e.stopPropagation()
+              setIsBgDropActive(false)
+              const file = e.dataTransfer.files?.[0]
+              if (!file) return
+              await handleBgMusicFile(file)
+            }}
+          >
             <div className="absolute top-1 left-2 flex items-center gap-1 text-xs text-blue-400">
               <Music className="w-3 h-3" />
               <span>背景音乐</span>
             </div>
             <canvas ref={bgCanvasRef} width={700} height={50} className="w-full h-[50px]" />
+            {isBgDropActive && (
+              <div className="absolute inset-0 bg-blue-500/15 border-2 border-blue-400 flex items-center justify-center text-xs text-blue-200 pointer-events-none">
+                放开以添加/替换背景音乐
+              </div>
+            )}
             {!bgMusicFile && (
               <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
-                未添加背景音乐
+                拖入音频文件添加背景音乐
               </div>
             )}
           </div>
@@ -526,7 +944,7 @@ export function AudioRecorder() {
           <div className="relative rounded overflow-hidden border border-border bg-secondary/30">
             <div className="absolute top-1 left-2 flex items-center gap-1 text-xs text-green-400">
               <Volume2 className="w-3 h-3" />
-              <span>混合输出</span>
+              <span>{isHeadphoneMode ? "混合输出" : "录音输出"}</span>
             </div>
             <canvas ref={mixCanvasRef} width={700} height={50} className="w-full h-[50px]" />
           </div>
@@ -535,10 +953,47 @@ export function AudioRecorder() {
         {/* 播放进度条 */}
         {recordingState === "stopped" && audioUrl && (
           <div className="mb-4">
-            <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+            <div className="relative h-1.5 bg-secondary rounded-full overflow-hidden">
               <div
-                className="h-full bg-primary transition-all duration-100"
-                style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+                ref={progressFillRef}
+                className="h-full bg-primary"
+              />
+              <input
+                type="range"
+                min={0}
+                max={duration > 0 ? duration : 0}
+                step={0.01}
+                value={duration > 0 ? currentTime : 0}
+                disabled={duration <= 0}
+                onPointerDown={() => {
+                  if (duration <= 0) return
+                  isSeekingRef.current = true
+                }}
+                onPointerUp={() => {
+                  isSeekingRef.current = false
+                  if (audioRef.current) setCurrentTime(audioRef.current.currentTime)
+                }}
+                onPointerCancel={() => {
+                  isSeekingRef.current = false
+                }}
+                onBlur={() => {
+                  isSeekingRef.current = false
+                }}
+                onKeyDown={() => {
+                  if (duration <= 0) return
+                  isSeekingRef.current = true
+                }}
+                onKeyUp={() => {
+                  isSeekingRef.current = false
+                  if (audioRef.current) setCurrentTime(audioRef.current.currentTime)
+                }}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value)
+                  isSeekingRef.current = true
+                  seekTo(v)
+                }}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                aria-label="播放进度"
               />
             </div>
           </div>
@@ -571,7 +1026,7 @@ export function AudioRecorder() {
                 className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 {isConverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                下载 MP3
+                {outputExt === ".m4a" ? "下载 M4A" : "下载 MP3"}
               </Button>
               <Button onClick={resetRecording} variant="outline" className="gap-2">
                 <RotateCcw className="w-4 h-4" />
@@ -582,6 +1037,34 @@ export function AudioRecorder() {
 
           {/* 分隔线 */}
           <div className="hidden sm:block w-px h-8 bg-border" />
+
+          {/* 耳机模式 */}
+          <div className="flex items-center gap-3 px-2 py-1 rounded-md border border-border bg-secondary/30">
+            <Headphones className="w-4 h-4 text-primary" />
+            <div className="flex items-center gap-1.5">
+              <Label className="text-sm">耳机模式</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    aria-label="耳机模式说明"
+                  >
+                    <CircleHelp className="size-3.5 shrink-0" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-balance">
+                  开：数字混音 · 关：不混音
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <Switch
+              checked={isHeadphoneMode}
+              onCheckedChange={setIsHeadphoneMode}
+              disabled={recordingState === "recording"}
+              aria-label="耳机模式"
+            />
+          </div>
 
           {/* 背景音乐上传 */}
           {!bgMusicFile ? (
@@ -637,8 +1120,8 @@ export function AudioRecorder() {
       </Card>
 
       <p className="mt-3 text-center text-xs text-muted-foreground">
-        支持所有常见音频格式 · 自动转换为 MP3 下载
-        {!ffmpegLoaded && " · FFmpeg 加载中..."}
+        支持所有常见音频格式 · 录音后可下载（优先 m4a；不支持时用前端编码库把 PCM 编码成 mp3）
+        支持拖拽添加或替换背景音乐
       </p>
     </div>
   )
