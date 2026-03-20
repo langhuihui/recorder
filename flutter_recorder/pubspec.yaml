@@ -1,0 +1,45 @@
+name: flutter_recorder
+description: A Flutter karaoke recorder app with background music and sharing support.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Audio recording from microphone with amplitude stream
+  record: ^5.1.2
+
+  # Audio playback (background music & recording playback)
+  just_audio: ^0.9.40
+
+  # System share sheet
+  share_plus: ^10.1.2
+
+  # Receive shared files (audio) from other apps
+  receive_sharing_intent: ^1.8.1
+
+  # File picker for choosing background music
+  file_picker: ^8.1.7
+
+  # Runtime permission requests
+  permission_handler: ^11.3.1
+
+  # App/temp directory paths
+  path_provider: ^2.1.5
+
+  # Date/time formatting for file names
+  intl: ^0.19.0
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
