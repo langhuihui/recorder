@@ -26,7 +26,6 @@ export function AudioRecorder() {
   const [bgVolume, setBgVolume] = useState(0.5)
   const [isBgDropActive, setIsBgDropActive] = useState(false)
   const [isConverting, setIsConverting] = useState(false)
-  const [ffmpegLoaded, setFfmpegLoaded] = useState(false)
   const [outputExt, setOutputExt] = useState<string>("") // ".m4a" / ".webm"
 
   const canRecordM4a =
@@ -62,10 +61,8 @@ export function AudioRecorder() {
   const bgAudioElementRef = useRef<HTMLAudioElement | null>(null)
   const bgGainNodeRef = useRef<GainNode | null>(null)
   const bgFileInputRef = useRef<HTMLInputElement>(null)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ffmpegRef = useRef<any>(null)
   const audioBlobRef = useRef<Blob | null>(null)
-  // 录音期间的 PCM 缓存（用于后续转码/分析）
+  // 录音期间的 PCM 缓存（WebM 导出 MP3 时使用）
   const pcmChunksRef = useRef<Float32Array[]>([])
   const pcmSampleRateRef = useRef<number>(0)
   const pcmCaptureNodeRef = useRef<ScriptProcessorNode | null>(null)
@@ -73,96 +70,6 @@ export function AudioRecorder() {
   const pcmZeroGainRef = useRef<GainNode | null>(null)
 
   const HISTORY_MAX = 600
-
-  // 动态加载 FFmpeg
-  const loadFfmpeg = useCallback(async () => {
-    if (ffmpegLoaded || ffmpegRef.current) return
-    try {
-      const { FFmpeg } = await import("@ffmpeg/ffmpeg")
-      const ffmpeg = new FFmpeg()
-      ffmpegRef.current = ffmpeg
-
-      const CORE_VERSION = "0.12.9"
-      const origin = window.location.origin
-      const cacheBust = Date.now().toString()
-      // 优先从本项目 public 目录加载，避免每次都从 unpkg 拉 wasm。
-      const localCoreURL = `${origin}/ffmpeg/ffmpeg-core.js?v=${cacheBust}`
-      const localWasmURL = `${origin}/ffmpeg/ffmpeg-core.wasm?v=${cacheBust}`
-
-      const assetExists = async (url: string) => {
-        // 本地 assets 应同源，HEAD 应该很快；若不支持则用 Range 做轻量探测。
-        const timeoutMs = 4000
-        const controller = new AbortController()
-        const t = window.setTimeout(() => controller.abort(), timeoutMs)
-        try {
-          const res = await fetch(url, { method: "HEAD", cache: "force-cache", signal: controller.signal })
-          if (res.ok) return true
-        } catch {
-          // ignore and fallback to range probe below
-        } finally {
-          window.clearTimeout(t)
-        }
-
-        // Fallback: range 探测，避免下载整个 wasm
-        const controller2 = new AbortController()
-        const t2 = window.setTimeout(() => controller2.abort(), timeoutMs)
-        try {
-          const res = await fetch(url, {
-            method: "GET",
-            headers: { Range: "bytes=0-0" },
-            cache: "force-cache",
-            signal: controller2.signal,
-          })
-          // GET + Range 成功通常是 206；部分服务也可能返回 200（小响应）。
-          return res.status === 206 || res.status === 200
-        } catch {
-          return false
-        } finally {
-          window.clearTimeout(t2)
-        }
-      }
-
-      const loadFromRemote = async () => {
-        const { toBlobURL } = await import("@ffmpeg/util")
-        // 跟最初的实现保持一致：优先使用 ESM 构建（支持 import() 默认导出）。
-        const baseURL = `https://unpkg.com/@ffmpeg/core@${CORE_VERSION}/dist/esm`
-        await ffmpeg.load({
-          classWorkerURL: `${origin}/ffmpeg/worker.js`,
-          coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-          wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-        })
-      }
-
-      if ((await assetExists(localWasmURL)) && (await assetExists(localCoreURL))) {
-        try {
-          console.info("FFmpeg: using local ffmpeg-core", { localCoreURL, localWasmURL })
-
-          // 用 Blob URL 让 wasm/js 的 MIME 与 core 期望更一致，避免本地加载时的边界问题。
-          const { toBlobURL } = await import("@ffmpeg/util")
-          const localCoreBlobURL = await toBlobURL(localCoreURL, "text/javascript")
-          const localWasmBlobURL = await toBlobURL(localWasmURL, "application/wasm")
-
-          await ffmpeg.load({
-            classWorkerURL: `${origin}/ffmpeg/worker.js`,
-            coreURL: localCoreBlobURL,
-            wasmURL: localWasmBlobURL,
-          })
-        } catch (localErr) {
-          console.warn("Local ffmpeg-core 加载失败，回退到 CDN：", localErr)
-          await loadFromRemote()
-        }
-      } else {
-        console.warn("FFmpeg: local ffmpeg-core not found, falling back to CDN", {
-          localCoreURL,
-          localWasmURL,
-        })
-        await loadFromRemote()
-      }
-      setFfmpegLoaded(true)
-    } catch (err) {
-      console.error("FFmpeg 加载失败:", err)
-    }
-  }, [ffmpegLoaded])
 
   const getPeak = (analyser: AnalyserNode) => {
     const bufferLength = analyser.fftSize
@@ -470,8 +377,7 @@ export function AudioRecorder() {
         setAudioUrl(null)
       }
 
-      // 优先录成 m4a（AAC），避免 ffmpeg 转码开销。
-      // 不支持时再退回 webm。
+      // 优先录成 m4a（AAC），便于直接导出；不支持时再退回 webm。
       const preferredMimeTypes = canRecordM4a
         ? ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm"]
         : ["audio/webm;codecs=opus", "audio/webm"]
@@ -566,44 +472,18 @@ export function AudioRecorder() {
     const isSelectionDisabled = recordingState === "recording" || isConverting
     if (isSelectionDisabled) return
 
-    // 允许拖拽时复用：始终以同一套逻辑完成“直接播放/FFmpeg 转换”
     if (bgMusicUrl) URL.revokeObjectURL(bgMusicUrl)
-    setIsConverting(false)
     if (bgFileInputRef.current) bgFileInputRef.current.value = ""
 
-    // 检查是否需要转换
     const supportedTypes = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/webm", "audio/mp4", "audio/aac"]
-    if (supportedTypes.includes(file.type) || file.name.match(/\.(mp3|wav|ogg|webm|m4a|aac)$/i)) {
-      const url = URL.createObjectURL(file)
-      setBgMusicFile(file)
-      setBgMusicUrl(url)
+    if (!supportedTypes.includes(file.type) && !file.name.match(/\.(mp3|wav|ogg|webm|m4a|aac)$/i)) {
+      alert("不支持该格式作为背景音乐，请使用 MP3、WAV、OGG、WebM、M4A 或 AAC。")
       return
     }
 
-    // 使用 FFmpeg 转换
-    setIsConverting(true)
-    try {
-      if (!ffmpegRef.current || !ffmpegLoaded) {
-        await loadFfmpeg()
-      }
-      if (!ffmpegRef.current || !ffmpegLoaded) {
-        throw new Error("FFmpeg 加载失败")
-      }
-      const { fetchFile } = await import("@ffmpeg/util")
-      const ffmpeg = ffmpegRef.current
-      await ffmpeg.writeFile("input", await fetchFile(file))
-      await ffmpeg.exec(["-i", "input", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
-      const data = await ffmpeg.readFile("output.mp3")
-      const blob = new Blob([data], { type: "audio/mpeg" })
-      const url = URL.createObjectURL(blob)
-      setBgMusicFile(new File([blob], file.name.replace(/\.[^.]+$/, ".mp3"), { type: "audio/mpeg" }))
-      setBgMusicUrl(url)
-    } catch (err) {
-      console.error("转换失败:", err)
-      alert("音频格式转换失败，请尝试其他文件")
-    } finally {
-      setIsConverting(false)
-    }
+    const url = URL.createObjectURL(file)
+    setBgMusicFile(file)
+    setBgMusicUrl(url)
   }
 
   const handleBgMusicUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -672,7 +552,6 @@ export function AudioRecorder() {
   const downloadRecording = async () => {
     if (!audioBlobRef.current) return
 
-    // 方案1：如果已经录成 m4a，直接导出，不需要 ffmpeg。
     if (outputExt === ".m4a") {
       try {
         const url = URL.createObjectURL(audioBlobRef.current)
@@ -690,34 +569,30 @@ export function AudioRecorder() {
       return
     }
 
-    // 兜底：如果浏览器不支持 m4a，就用前端编码库把 PCM 编码为 mp3。
     const sampleRate = pcmSampleRateRef.current
     const pcmChunks = pcmChunksRef.current
     const hasPcm = Boolean(sampleRate && pcmChunks.length > 0)
 
-    setIsConverting(true)
-    try {
-      if (!hasPcm) {
-        // 最后兜底：PCM 捕获失败时，退回使用 ffmpeg（会比较慢，但能确保功能可用）
-        if (!ffmpegRef.current || !ffmpegLoaded) await loadFfmpeg()
-        if (!ffmpegRef.current || !ffmpegLoaded) throw new Error("FFmpeg 加载失败")
-
-        const { fetchFile } = await import("@ffmpeg/util")
-        const ffmpeg = ffmpegRef.current
-        await ffmpeg.writeFile("input.webm", await fetchFile(audioBlobRef.current))
-        await ffmpeg.exec(["-i", "input.webm", "-acodec", "libmp3lame", "-b:a", "192k", "output.mp3"])
-        const data = await ffmpeg.readFile("output.mp3")
-        const blob = new Blob([data], { type: "audio/mpeg" })
+    if (!hasPcm) {
+      try {
+        const blob = audioBlobRef.current
         const url = URL.createObjectURL(blob)
         const a = document.createElement("a")
         a.href = url
-        a.download = `录音_${new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-")}.mp3`
+        a.download = `录音_${new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-")}.webm`
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
         URL.revokeObjectURL(url)
-        return
+      } catch (err) {
+        console.error("WebM 导出失败:", err)
+        alert("无法导出录音（未采集到 PCM 时仅支持下载 WebM）")
       }
+      return
+    }
+
+    setIsConverting(true)
+    try {
 
       const { Mp3Encoder } = await import("lamejs")
       const encoder = new Mp3Encoder(1, sampleRate, 192)
@@ -1026,7 +901,7 @@ export function AudioRecorder() {
                 className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
               >
                 {isConverting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                {outputExt === ".m4a" ? "下载 M4A" : "下载 MP3"}
+                {outputExt === ".m4a" ? "下载 M4A" : "下载录音"}
               </Button>
               <Button onClick={resetRecording} variant="outline" className="gap-2">
                 <RotateCcw className="w-4 h-4" />
@@ -1120,8 +995,7 @@ export function AudioRecorder() {
       </Card>
 
       <p className="mt-3 text-center text-xs text-muted-foreground">
-        支持所有常见音频格式 · 录音后可下载（优先 m4a；不支持时用前端编码库把 PCM 编码成 mp3）
-        支持拖拽添加或替换背景音乐
+        录音优先导出 M4A；否则将 PCM 编码为 MP3（无 PCM 时下载 WebM）。背景音乐支持 MP3、WAV、OGG、WebM、M4A、AAC，可拖拽添加。
       </p>
     </div>
   )
