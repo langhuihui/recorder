@@ -1,13 +1,12 @@
 name: Build Android APK
 
+# Branch / PR builds only — no GitHub Release (see publish-release-apk.yml for tags).
 on:
   push:
     branches:
       - main
       - master
       - 'copilot/**'
-    tags:
-      - 'v*'
   pull_request:
     branches:
       - main
@@ -19,7 +18,7 @@ jobs:
     name: Build Release APK
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -53,16 +52,3 @@ jobs:
         with:
           name: release-apk-${{ github.ref_name }}-${{ github.sha }}
           path: flutter_recorder/build/app/outputs/flutter-apk/app-release.apk
-
-      - name: Stage APK for GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          cp "flutter_recorder/build/app/outputs/flutter-apk/app-release.apk" \
-            "flutter_recorder-${{ github.ref_name }}.apk"
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: flutter_recorder-${{ github.ref_name }}.apk
-          generate_release_notes: true
