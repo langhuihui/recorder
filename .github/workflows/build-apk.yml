@@ -6,6 +6,8 @@ on:
       - main
       - master
       - 'copilot/**'
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
@@ -16,7 +18,7 @@ jobs:
     name: Build Release APK
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -46,3 +48,9 @@ jobs:
         with:
           name: release-apk
           path: flutter_recorder/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: flutter_recorder/build/app/outputs/flutter-apk/app-release.apk
