@@ -1,12 +1,10 @@
 name: Build Android APK
 
-# Branch / PR builds only — no GitHub Release (see publish-release-apk.yml for tags).
+# No push-to-main: avoids a green run on every merge while tag releases build separately.
+# - PRs: verify APK still builds before merge
+# - workflow_dispatch: manual build + artifact
+# - Tags v*: see publish-release-apk.yml (Release APK attachment)
 on:
-  push:
-    branches:
-      - main
-      - master
-      - 'copilot/**'
   pull_request:
     branches:
       - main
