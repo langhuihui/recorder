@@ -88,8 +88,12 @@
             <array>
                 <string>public.audio</string>
                 <string>public.mp3</string>
-                <string>com.apple.m4a-audio</string>
                 <string>public.mpeg-4-audio</string>
+                <string>com.apple.m4a-audio</string>
+                <string>public.aac-audio</string>
+                <string>public.wav</string>
+                <string>public.aiff-audio</string>
+                <string>org.xiph.flac</string>
             </array>
         </dict>
     </array>

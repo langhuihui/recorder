@@ -17,7 +17,7 @@ import 'waveform_painter.dart';
 // ---------------------------------------------------------------------------
 // App version
 // ---------------------------------------------------------------------------
-const _kAppVersion = '1.0.0';
+const _kAppVersion = '1.0.1';
 
 // ---------------------------------------------------------------------------
 // Recording state enum
@@ -128,10 +128,9 @@ class _RecorderScreenState extends State<RecorderScreen>
 
   void _handleSharedFiles(List<SharedMediaFile> files) {
     if (files.isEmpty) return;
-    // Find the first file with an audio extension (works regardless of type enum version)
     SharedMediaFile? audioFile;
     for (final f in files) {
-      if (_isAudioFile(f.path)) {
+      if (_isSharedAudio(f)) {
         audioFile = f;
         break;
       }
@@ -140,6 +139,17 @@ class _RecorderScreenState extends State<RecorderScreen>
       _setBgMusicFromPath(audioFile.path);
       ReceiveSharingIntent.instance.reset();
     }
+  }
+
+  /// True for paths that look like audio, or MIME from ACTION_VIEW / share.
+  bool _isSharedAudio(SharedMediaFile f) {
+    if (_isAudioFile(f.path)) return true;
+    final m = f.mimeType?.toLowerCase();
+    if (m == null) return false;
+    if (m.startsWith('audio/')) return true;
+    return m == 'application/ogg' ||
+        m == 'application/x-flac' ||
+        m == 'application/flac';
   }
 
   bool _isAudioFile(String path) {
@@ -520,25 +530,35 @@ class _RecorderScreenState extends State<RecorderScreen>
     final isStopped = _recordingState == RecordingState.stopped;
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       body: SafeArea(
-        child: Stack(
-          children: [
-            // Version badge
-            Positioned(
-              top: 4,
-              left: 8,
-              child: _versionBadge(),
-            ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final availH = constraints.maxHeight;
+            final waveH = (availH * 0.085).clamp(48.0, 90.0);
+            final bgWaveH = (availH * 0.095).clamp(56.0, 96.0);
 
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 28, 8, 8),
-              child: Column(
-                children: [
-                  _buildCard(isRecording: isRecording, isStopped: isStopped),
-                ],
-              ),
-            ),
-          ],
+            return Stack(
+              children: [
+                Positioned(
+                  top: 4,
+                  left: 8,
+                  child: _versionBadge(),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 28, 8, 8),
+                  child: SingleChildScrollView(
+                    child: _buildCard(
+                      isRecording: isRecording,
+                      isStopped: isStopped,
+                      waveformHeight: waveH,
+                      bgWaveHeight: bgWaveH,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -559,7 +579,12 @@ class _RecorderScreenState extends State<RecorderScreen>
     );
   }
 
-  Widget _buildCard({required bool isRecording, required bool isStopped}) {
+  Widget _buildCard({
+    required bool isRecording,
+    required bool isStopped,
+    required double waveformHeight,
+    required double bgWaveHeight,
+  }) {
     return Card(
       color: const Color(0xFF1e1e2e),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -570,11 +595,17 @@ class _RecorderScreenState extends State<RecorderScreen>
           children: [
             _buildTitleRow(isStopped: isStopped),
             const SizedBox(height: 8),
-            _buildMicWaveform(isRecording: isRecording),
+            _buildMicWaveform(
+              isRecording: isRecording,
+              height: waveformHeight,
+            ),
             const SizedBox(height: 4),
-            _buildBgMusicPanel(isRecording: isRecording),
+            _buildBgMusicPanel(
+              isRecording: isRecording,
+              waveHeight: bgWaveHeight,
+            ),
             const SizedBox(height: 4),
-            _buildMixWaveform(),
+            _buildMixWaveform(height: waveformHeight),
             const SizedBox(height: 8),
             if (isStopped && _recordingPath != null) ...[
               _buildPlaybackBar(),
@@ -594,31 +625,44 @@ class _RecorderScreenState extends State<RecorderScreen>
         : _formatTime(_recordDuration.toDouble());
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        const Row(
-          children: [
-            Icon(Icons.volume_up, color: Color(0xFFf472b6), size: 20),
-            SizedBox(width: 8),
-            Text(
-              '在线录音',
-              style: TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          ],
+        Expanded(
+          child: Row(
+            children: [
+              const Icon(Icons.volume_up, color: Color(0xFFf472b6), size: 20),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  '在线录音',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              timeStr,
-              style: const TextStyle(
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                timeStr,
+                style: const TextStyle(
                   fontSize: 22,
                   fontFamily: 'monospace',
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFFf472b6)),
+                  color: Color(0xFFf472b6),
+                ),
+              ),
             ),
-            const SizedBox(width: 12),
-            // Headphone mode toggle
+            const SizedBox(width: 8),
             const Icon(Icons.headphones, color: Color(0xFFf472b6), size: 18),
             const SizedBox(width: 4),
             Switch(
@@ -636,8 +680,12 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   // --- Waveform panels ---
-  Widget _buildMicWaveform({required bool isRecording}) {
+  Widget _buildMicWaveform({
+    required bool isRecording,
+    required double height,
+  }) {
     return _waveformPanel(
+      height: height,
       label: '麦克风',
       labelColor: const Color(0xFFf472b6),
       icon: Icons.mic,
@@ -660,8 +708,9 @@ class _RecorderScreenState extends State<RecorderScreen>
     );
   }
 
-  Widget _buildMixWaveform() {
+  Widget _buildMixWaveform({required double height}) {
     return _waveformPanel(
+      height: height,
       label: _isHeadphoneMode ? '混合输出' : '录音输出',
       labelColor: const Color(0xFF4ade80),
       icon: Icons.volume_up,
@@ -675,6 +724,7 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   Widget _waveformPanel({
+    required double height,
     required String label,
     required Color labelColor,
     required IconData icon,
@@ -685,7 +735,7 @@ class _RecorderScreenState extends State<RecorderScreen>
     Widget? trailing,
   }) {
     return Container(
-      height: 60,
+      height: height,
       decoration: BoxDecoration(
         color: const Color(0xFF12121f),
         borderRadius: BorderRadius.circular(6),
@@ -724,11 +774,14 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   // --- Background music panel ---
-  Widget _buildBgMusicPanel({required bool isRecording}) {
+  Widget _buildBgMusicPanel({
+    required bool isRecording,
+    required double waveHeight,
+  }) {
     return GestureDetector(
       onTap: _bgMusicPath == null && !isRecording ? _pickBgMusic : null,
       child: Container(
-        constraints: const BoxConstraints(minHeight: 80),
+        constraints: BoxConstraints(minHeight: waveHeight + 20),
         decoration: BoxDecoration(
           color: const Color(0xFF12121f),
           borderRadius: BorderRadius.circular(6),
@@ -739,7 +792,7 @@ class _RecorderScreenState extends State<RecorderScreen>
           children: [
             // Waveform area
             SizedBox(
-              height: 60,
+              height: waveHeight,
               child: Stack(
                 children: [
                   SizedBox.expand(
