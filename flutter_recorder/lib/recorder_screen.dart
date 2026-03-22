@@ -40,7 +40,8 @@ class _RecorderScreenState extends State<RecorderScreen>
   RecordingState _recordingState = RecordingState.idle;
   bool _isHeadphoneMode = false;
   bool _isPlaying = false;
-  int _recordDuration = 0; // seconds during recording
+  double _recordSeconds = 0;
+  Stopwatch? _recordStopwatch;
   double _playbackPosition = 0;
   double _playbackDuration = 0;
 
@@ -76,7 +77,6 @@ class _RecorderScreenState extends State<RecorderScreen>
   List<double> _mixReplay = [];
 
   // --- Timers & subscriptions ---
-  Timer? _recordTimer;
   Timer? _amplitudeTimer;
   StreamSubscription? _sharingIntentSub;
   StreamSubscription? _bgPositionSub;
@@ -104,7 +104,6 @@ class _RecorderScreenState extends State<RecorderScreen>
     _playbackPositionSub?.cancel();
     _playbackDurationSub?.cancel();
     _playbackStateSub?.cancel();
-    _recordTimer?.cancel();
     _amplitudeTimer?.cancel();
     _recorder.dispose();
     _bgPlayer.dispose();
@@ -266,9 +265,10 @@ class _RecorderScreenState extends State<RecorderScreen>
       }
     }
 
+    _recordStopwatch = Stopwatch()..start();
     setState(() {
       _recordingState = RecordingState.recording;
-      _recordDuration = 0;
+      _recordSeconds = 0;
       _micHistory.clear();
       _bgHistory.clear();
       _mixHistory.clear();
@@ -281,12 +281,7 @@ class _RecorderScreenState extends State<RecorderScreen>
       _playbackDuration = 0;
     });
 
-    // Timer for displayed recording duration
-    _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => _recordDuration++);
-    });
-
-    // Amplitude polling at ~20 fps
+    // Amplitude polling at ~20 fps (also drives recording time display)
     _amplitudeTimer = Timer.periodic(const Duration(milliseconds: 50), (_) async {
       if (_recordingState != RecordingState.recording) return;
       try {
@@ -305,6 +300,10 @@ class _RecorderScreenState extends State<RecorderScreen>
             : micPeak;
 
         setState(() {
+          final sw = _recordStopwatch;
+          if (sw != null) {
+            _recordSeconds = sw.elapsedMilliseconds / 1000.0;
+          }
           _micHistory.add(micPeak);
           if (_micHistory.length > _historyMax) _micHistory.removeAt(0);
 
@@ -323,14 +322,14 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   double _dbToLinear(double db) {
-    if (db <= -60) return 0.0;
+    if (!db.isFinite || db <= -60) return 0.0;
     if (db >= 0) return 1.0;
     return math.pow(10, db / 20).toDouble();
   }
 
   Future<void> _stopRecording() async {
-    _recordTimer?.cancel();
     _amplitudeTimer?.cancel();
+    _recordStopwatch?.stop();
 
     await _bgPlayer.stop();
     final path = await _recorder.stop();
@@ -348,12 +347,17 @@ class _RecorderScreenState extends State<RecorderScreen>
       _bgReplay = bgReplay;
       _mixReplay = mixReplay;
       _playbackPosition = 0;
-      _playbackDuration = _recordDuration.toDouble();
+      _playbackDuration = _recordSeconds;
     });
 
     if (_recordingPath != null) {
       try {
-        await _playbackPlayer.setFilePath(_recordingPath!);
+        // Brief delay so the container is fully finalized on Android before ExoPlayer opens it.
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        await _playbackPlayer.stop();
+        await _playbackPlayer.setAudioSource(
+          AudioSource.file(_recordingPath!),
+        );
         final duration = _playbackPlayer.duration;
         if (duration != null) {
           setState(() => _playbackDuration = duration.inMilliseconds / 1000.0);
@@ -424,7 +428,8 @@ class _RecorderScreenState extends State<RecorderScreen>
     setState(() {
       _recordingState = RecordingState.idle;
       _isPlaying = false;
-      _recordDuration = 0;
+      _recordSeconds = 0;
+      _recordStopwatch = null;
       _playbackPosition = 0;
       _playbackDuration = 0;
       _micHistory.clear();
@@ -451,7 +456,7 @@ class _RecorderScreenState extends State<RecorderScreen>
     }
     try {
       await Share.shareXFiles(
-        [XFile(_recordingPath!, mimeType: 'audio/m4a')],
+        [XFile(_recordingPath!, mimeType: 'audio/mp4')],
         subject: '录音分享',
         text: '录音分享',
       );
@@ -535,8 +540,10 @@ class _RecorderScreenState extends State<RecorderScreen>
         child: LayoutBuilder(
           builder: (context, constraints) {
             final availH = constraints.maxHeight;
-            final waveH = (availH * 0.085).clamp(48.0, 90.0);
-            final bgWaveH = (availH * 0.095).clamp(56.0, 96.0);
+            final availW = constraints.maxWidth;
+            final innerH = math.max(0.0, availH - 36);
+            final waveH = (availH * 0.11).clamp(56.0, 118.0);
+            final bgWaveH = (availH * 0.12).clamp(64.0, 130.0);
 
             return Stack(
               children: [
@@ -548,11 +555,15 @@ class _RecorderScreenState extends State<RecorderScreen>
                 Padding(
                   padding: const EdgeInsets.fromLTRB(8, 28, 8, 8),
                   child: SingleChildScrollView(
-                    child: _buildCard(
-                      isRecording: isRecording,
-                      isStopped: isStopped,
-                      waveformHeight: waveH,
-                      bgWaveHeight: bgWaveH,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minHeight: innerH),
+                      child: _buildCard(
+                        isRecording: isRecording,
+                        isStopped: isStopped,
+                        layoutWidth: availW - 16,
+                        waveformHeight: waveH,
+                        bgWaveHeight: bgWaveH,
+                      ),
                     ),
                   ),
                 ),
@@ -582,6 +593,7 @@ class _RecorderScreenState extends State<RecorderScreen>
   Widget _buildCard({
     required bool isRecording,
     required bool isStopped,
+    required double layoutWidth,
     required double waveformHeight,
     required double bgWaveHeight,
   }) {
@@ -591,7 +603,8 @@ class _RecorderScreenState extends State<RecorderScreen>
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildTitleRow(isStopped: isStopped),
             const SizedBox(height: 8),
@@ -611,7 +624,12 @@ class _RecorderScreenState extends State<RecorderScreen>
               _buildPlaybackBar(),
               const SizedBox(height: 8),
             ],
-            _buildControls(isRecording: isRecording, isStopped: isStopped),
+            _buildControls(
+              isRecording: isRecording,
+              isStopped: isStopped,
+              maxWidth: layoutWidth - 24,
+            ),
+            const Spacer(),
           ],
         ),
       ),
@@ -622,7 +640,7 @@ class _RecorderScreenState extends State<RecorderScreen>
   Widget _buildTitleRow({required bool isStopped}) {
     final timeStr = isStopped && _recordingPath != null
         ? '${_formatTime(_playbackPosition)} / ${_formatTime(_playbackDuration)}'
-        : _formatTime(_recordDuration.toDouble());
+        : _formatTime(_recordSeconds);
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -647,33 +665,38 @@ class _RecorderScreenState extends State<RecorderScreen>
             ],
           ),
         ),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                timeStr,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFFf472b6),
+        Flexible(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    timeStr,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFFf472b6),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            const Icon(Icons.headphones, color: Color(0xFFf472b6), size: 18),
-            const SizedBox(width: 4),
-            Switch(
-              value: _isHeadphoneMode,
-              onChanged: _recordingState == RecordingState.recording
-                  ? null
-                  : (v) => setState(() => _isHeadphoneMode = v),
-              activeColor: const Color(0xFFf472b6),
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-          ],
+              const SizedBox(width: 8),
+              const Icon(Icons.headphones, color: Color(0xFFf472b6), size: 18),
+              const SizedBox(width: 4),
+              Switch(
+                value: _isHeadphoneMode,
+                onChanged: _recordingState == RecordingState.recording
+                    ? null
+                    : (v) => setState(() => _isHeadphoneMode = v),
+                activeThumbColor: const Color(0xFFf472b6),
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -980,7 +1003,11 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   // --- Controls ---
-  Widget _buildControls({required bool isRecording, required bool isStopped}) {
+  Widget _buildControls({
+    required bool isRecording,
+    required bool isStopped,
+    required double maxWidth,
+  }) {
     if (isRecording) {
       return SizedBox(
         width: double.infinity,
@@ -998,31 +1025,57 @@ class _RecorderScreenState extends State<RecorderScreen>
     }
 
     if (isStopped && _recordingPath != null) {
+      final playBtn = _controlBtn(
+        icon: _isPlaying ? Icons.pause : Icons.play_arrow,
+        label: _isPlaying ? '暂停' : '播放',
+        onTap: _togglePlayback,
+      );
+      final rerecordBtn = _controlBtn(
+        icon: Icons.refresh,
+        label: '重录',
+        onTap: _resetRecording,
+      );
+      final shareBtn = _controlBtn(
+        icon: Icons.share,
+        label: '分享',
+        onTap: _shareRecording,
+      );
+      final saveBtn = _controlBtn(
+        icon: Icons.download,
+        label: '保存',
+        onTap: _saveRecording,
+      );
+      if (maxWidth < 360) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                playBtn,
+                const SizedBox(width: 8),
+                rerecordBtn,
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                shareBtn,
+                const SizedBox(width: 8),
+                saveBtn,
+              ],
+            ),
+          ],
+        );
+      }
       return Row(
         children: [
-          _controlBtn(
-            icon: _isPlaying ? Icons.pause : Icons.play_arrow,
-            label: _isPlaying ? '暂停' : '播放',
-            onTap: _togglePlayback,
-          ),
+          playBtn,
           const SizedBox(width: 8),
-          _controlBtn(
-            icon: Icons.refresh,
-            label: '重录',
-            onTap: _resetRecording,
-          ),
+          rerecordBtn,
           const SizedBox(width: 8),
-          _controlBtn(
-            icon: Icons.share,
-            label: '分享',
-            onTap: _shareRecording,
-          ),
+          shareBtn,
           const SizedBox(width: 8),
-          _controlBtn(
-            icon: Icons.download,
-            label: '保存',
-            onTap: _saveRecording,
-          ),
+          saveBtn,
         ],
       );
     }

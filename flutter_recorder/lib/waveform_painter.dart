@@ -37,12 +37,21 @@ class WaveformPainter extends CustomPainter {
         ..strokeWidth = 1.0,
     );
 
-    if (history.length >= 2) {
+    // Need at least two sample columns to span the width; duplicate a single point.
+    final n = history.length;
+    if (n >= 1) {
+      double xAt(int i) {
+        if (n == 1) return i == 0 ? 0.0 : w;
+        return (i / (n - 1)) * w;
+      }
+
       // Build upper path for fill
       final fillPath = Path();
-      for (int i = 0; i < history.length; i++) {
-        final x = (i / (history.length - 1)) * w;
-        final y = cx - history[i] * cx * 0.85;
+      final count = n == 1 ? 2 : n;
+      for (int i = 0; i < count; i++) {
+        final idx = n == 1 ? 0 : i;
+        final x = xAt(i);
+        final y = cx - history[idx] * cx * 0.85;
         if (i == 0) {
           fillPath.moveTo(x, y);
         } else {
@@ -50,9 +59,10 @@ class WaveformPainter extends CustomPainter {
         }
       }
       // Mirror bottom
-      for (int i = history.length - 1; i >= 0; i--) {
-        final x = (i / (history.length - 1)) * w;
-        final y = cx + history[i] * cx * 0.85;
+      for (int i = count - 1; i >= 0; i--) {
+        final idx = n == 1 ? 0 : i;
+        final x = xAt(i);
+        final y = cx + history[idx] * cx * 0.85;
         fillPath.lineTo(x, y);
       }
       fillPath.close();
@@ -82,9 +92,10 @@ class WaveformPainter extends CustomPainter {
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, 2.0);
 
       final upperPath = Path();
-      for (int i = 0; i < history.length; i++) {
-        final x = (i / (history.length - 1)) * w;
-        final y = cx - history[i] * cx * 0.85;
+      for (int i = 0; i < count; i++) {
+        final idx = n == 1 ? 0 : i;
+        final x = xAt(i);
+        final y = cx - history[idx] * cx * 0.85;
         if (i == 0) {
           upperPath.moveTo(x, y);
         } else {
@@ -95,9 +106,10 @@ class WaveformPainter extends CustomPainter {
 
       // Lower stroke
       final lowerPath = Path();
-      for (int i = 0; i < history.length; i++) {
-        final x = (i / (history.length - 1)) * w;
-        final y = cx + history[i] * cx * 0.85;
+      for (int i = 0; i < count; i++) {
+        final idx = n == 1 ? 0 : i;
+        final x = xAt(i);
+        final y = cx + history[idx] * cx * 0.85;
         if (i == 0) {
           lowerPath.moveTo(x, y);
         } else {
@@ -120,7 +132,21 @@ class WaveformPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(WaveformPainter oldDelegate) =>
-      oldDelegate.history != history ||
-      oldDelegate.cursorRatio != cursorRatio;
+  bool shouldRepaint(WaveformPainter oldDelegate) {
+    if (oldDelegate.waveColor != waveColor ||
+        oldDelegate.glowColor != glowColor ||
+        oldDelegate.cursorRatio != cursorRatio) {
+      return true;
+    }
+    if (identical(oldDelegate.history, history)) {
+      if (history.isEmpty) return false;
+      if (oldDelegate.history.isEmpty) return true;
+      if (oldDelegate.history.length != history.length) return true;
+      return oldDelegate.history.last != history.last;
+    }
+    if (oldDelegate.history.length != history.length) return true;
+    if (history.isEmpty) return oldDelegate.history.isNotEmpty;
+    if (oldDelegate.history.isEmpty) return true;
+    return oldDelegate.history.last != history.last;
+  }
 }
