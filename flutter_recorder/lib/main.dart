@@ -1,7 +1,23 @@
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
+
 import 'recorder_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final session = await AudioSession.instance;
+  await session.configure(AudioSessionConfiguration(
+    avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+    avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.defaultToSpeaker |
+        AVAudioSessionCategoryOptions.allowBluetooth,
+    avAudioSessionMode: AVAudioSessionMode.defaultMode,
+    androidAudioAttributes: const AndroidAudioAttributes(
+      contentType: AndroidAudioContentType.music,
+      usage: AndroidAudioUsage.media,
+    ),
+    androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+    androidWillPauseWhenDucked: false,
+  ));
   runApp(const RecorderApp());
 }
 
@@ -11,7 +27,7 @@ class RecorderApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '在线录音',
+      title: '伴唱助手',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: const ColorScheme.dark(
@@ -22,6 +38,10 @@ class RecorderApp extends StatelessWidget {
         ),
         scaffoldBackgroundColor: const Color(0xFF12121f),
         cardColor: const Color(0xFF1e1e2e),
+        cardTheme: const CardThemeData(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+        ),
         useMaterial3: true,
       ),
       home: const RecorderScreen(),

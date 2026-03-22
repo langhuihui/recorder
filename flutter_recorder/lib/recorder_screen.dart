@@ -3,9 +3,11 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_waveform/just_waveform.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
@@ -18,6 +20,10 @@ import 'waveform_painter.dart';
 // App version
 // ---------------------------------------------------------------------------
 const _kAppVersion = '1.0.1';
+
+/// Native `recorder.start` can hang indefinitely on some devices when ExoPlayer
+/// is already playing; Dart `finally` then never runs and the UI stays on「准备中」.
+const Duration _kRecordStartTimeout = Duration(seconds: 15);
 
 // ---------------------------------------------------------------------------
 // Recording state enum
@@ -81,9 +87,40 @@ class _RecorderScreenState extends State<RecorderScreen>
   StreamSubscription? _sharingIntentSub;
   StreamSubscription? _bgPositionSub;
   StreamSubscription? _bgDurationSub;
+  StreamSubscription<PlayerState>? _bgPlayerStateSub;
   StreamSubscription? _playbackPositionSub;
   StreamSubscription? _playbackDurationSub;
   StreamSubscription? _playbackStateSub;
+  StreamSubscription? _playbackPlayingSub;
+  StreamSubscription<WaveformProgress>? _bgWaveExtractSub;
+
+  /// Extracted from background file (Android / iOS / macOS). Null while loading.
+  Waveform? _bgWaveform;
+
+  /// Prevents overlapping start/stop: async handlers return immediately from
+  /// onPressed, so without this a second tap can run while the first awaits mic start.
+  bool _recordOpInFlight = false;
+
+  /// `audioInterruption: none` avoids fighting just_audio. Mic + normal mode tends
+  /// to complete `start()` reliably with BGM on more devices.
+  RecordConfig _micRecordConfig(AudioEncoder encoder, {required int bitRate}) {
+    return RecordConfig(
+      encoder: encoder,
+      sampleRate: 48000,
+      bitRate: bitRate,
+      numChannels: 1,
+      autoGain: true,
+      echoCancel: false,
+      noiseSuppress: false,
+      audioInterruption: AudioInterruptionMode.none,
+      androidConfig: (!kIsWeb && Platform.isAndroid)
+          ? const AndroidRecordConfig(
+              audioSource: AndroidAudioSource.mic,
+              audioManagerMode: AudioManagerMode.modeNormal,
+            )
+          : const AndroidRecordConfig(),
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -92,6 +129,15 @@ class _RecorderScreenState extends State<RecorderScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _bgPlayerStateSub = _bgPlayer.playerStateStream.listen((state) {
+      if (!mounted) return;
+      if (state.processingState == ProcessingState.completed) {
+        setState(() => _bgPosition = _bgDuration);
+        if (_recordingState == RecordingState.recording && !_recordOpInFlight) {
+          unawaited(_stopRecording());
+        }
+      }
+    });
     _initSharingIntent();
   }
 
@@ -101,9 +147,12 @@ class _RecorderScreenState extends State<RecorderScreen>
     _sharingIntentSub?.cancel();
     _bgPositionSub?.cancel();
     _bgDurationSub?.cancel();
+    _bgPlayerStateSub?.cancel();
     _playbackPositionSub?.cancel();
     _playbackDurationSub?.cancel();
     _playbackStateSub?.cancel();
+    _playbackPlayingSub?.cancel();
+    _bgWaveExtractSub?.cancel();
     _amplitudeTimer?.cancel();
     _recorder.dispose();
     _bgPlayer.dispose();
@@ -115,6 +164,7 @@ class _RecorderScreenState extends State<RecorderScreen>
   // Sharing intent – receive audio files shared from other apps
   // ---------------------------------------------------------------------------
   void _initSharingIntent() {
+    if (kIsWeb) return;
     // Handle the intent that launched the app
     ReceiveSharingIntent.instance.getInitialMedia().then((files) {
       _handleSharedFiles(files);
@@ -175,7 +225,11 @@ class _RecorderScreenState extends State<RecorderScreen>
       _bgDuration = 0;
       _bgPosition = 0;
       _bgHistory.clear();
+      _bgWaveform = null;
     });
+    _bgWaveExtractSub?.cancel();
+    _bgWaveExtractSub = null;
+    _startBgWaveformExtraction(path);
     try {
       await _bgPlayer.setFilePath(path);
       await _bgPlayer.setVolume(_bgVolume);
@@ -211,19 +265,91 @@ class _RecorderScreenState extends State<RecorderScreen>
   void _removeBgMusic() {
     if (_recordingState == RecordingState.recording) return;
     _bgPlayer.stop();
+    _bgWaveExtractSub?.cancel();
+    _bgWaveExtractSub = null;
     setState(() {
       _bgMusicPath = null;
       _bgMusicName = null;
       _bgDuration = 0;
       _bgPosition = 0;
       _bgHistory.clear();
+      _bgWaveform = null;
     });
   }
+
+  /// Real waveform from file (just_waveform). No-op on Web / Linux / Windows.
+  void _startBgWaveformExtraction(String audioPath) {
+    if (kIsWeb) return;
+    if (!Platform.isAndroid && !Platform.isIOS && !Platform.isMacOS) return;
+
+    _bgWaveExtractSub?.cancel();
+    _bgWaveExtractSub = null;
+
+    unawaited(() async {
+      try {
+        final dir = await getTemporaryDirectory();
+        final waveOut =
+            File('${dir.path}/bg_wave_${audioPath.hashCode.abs()}.wave');
+        final inFile = File(audioPath);
+        if (!await inFile.exists()) return;
+
+        _bgWaveExtractSub = JustWaveform.extract(
+          audioInFile: inFile,
+          waveOutFile: waveOut,
+          zoom: const WaveformZoom.pixelsPerSecond(256),
+        ).listen(
+          (progress) {
+            if (!mounted) return;
+            final wv = progress.waveform;
+            if (wv != null) {
+              setState(() => _bgWaveform = wv);
+            }
+          },
+          onError: (Object e, StackTrace st) =>
+              debugPrint('just_waveform: $e'),
+        );
+      } catch (e) {
+        debugPrint('bg waveform extract: $e');
+      }
+    }());
+  }
+
+  double _sampleBgWaveformPeak() {
+    final wv = _bgWaveform;
+    if (wv == null || wv.length == 0 || _bgDuration <= 0.02) return 0;
+    final pos = Duration(milliseconds: (_bgPosition * 1000).round());
+    var px = wv.positionToPixel(pos).floor();
+    if (px < 0) px = 0;
+    if (px >= wv.length) px = wv.length - 1;
+    final hi = wv.getPixelMax(px).abs();
+    final lo = wv.getPixelMin(px).abs();
+    final raw = math.max(hi, lo).toDouble();
+    final norm = (wv.flags & 1) != 0 ? raw / 128.0 : raw / 32768.0;
+    return (norm * _bgVolume).clamp(0.0, 1.0);
+  }
+
+  String _recordingMimeForShare() {
+    return 'audio/mp4';
+  }
+
+  String _recordingSaveExtension() {
+    return 'm4a';
+  }
+
+  bool get _bgWaveformReady =>
+      !kIsWeb &&
+      (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) &&
+      _bgWaveform != null;
 
   // ---------------------------------------------------------------------------
   // Recording
   // ---------------------------------------------------------------------------
   Future<void> _startRecording() async {
+    if (_recordingState != RecordingState.idle || _recordOpInFlight) return;
+    _recordOpInFlight = true;
+    if (mounted) setState(() {});
+
+    try {
     // Request microphone permission
     final micStatus = await Permission.microphone.request();
     if (!micStatus.isGranted) {
@@ -236,30 +362,35 @@ class _RecorderScreenState extends State<RecorderScreen>
     final filePath = '${dir.path}/recording_$timestamp.m4a';
 
     try {
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.aacLc,
-          sampleRate: 48000,
-          bitRate: 192000,
-          numChannels: 1,
-          autoGain: true,
-          echoCancel: false,
-          noiseSuppress: false,
-        ),
-        path: filePath,
-      );
+      await _recorder
+          .start(
+            _micRecordConfig(AudioEncoder.aacLc, bitRate: 192000),
+            path: filePath,
+          )
+          .timeout(
+            _kRecordStartTimeout,
+            onTimeout: () => throw TimeoutException('recorder.start aac'),
+          );
     } catch (e) {
-      _showSnackBar('无法开始录音: $e');
+      try {
+        await _recorder.cancel();
+      } catch (_) {}
+      await _bgPlayer.stop();
+      if (e is TimeoutException) {
+        _showSnackBar('打开麦克风超时，请关闭其他占用麦克风的应用后重试');
+      } else {
+        _showSnackBar('无法开始录音: $e');
+      }
       return;
     }
 
-    // Start background music if loaded
     if (_bgMusicPath != null) {
       try {
         await _bgPlayer.setVolume(_bgVolume);
-        await _bgPlayer.setLoopMode(LoopMode.one);
+        await _bgPlayer.setLoopMode(LoopMode.off);
         await _bgPlayer.seek(Duration.zero);
-        await _bgPlayer.play();
+        unawaited(_bgPlayer.play());
+        await Future<void>.delayed(const Duration(milliseconds: 90));
       } catch (e) {
         debugPrint('背景音乐播放失败: $e');
       }
@@ -286,13 +417,21 @@ class _RecorderScreenState extends State<RecorderScreen>
       if (_recordingState != RecordingState.recording) return;
       try {
         final amp = await _recorder.getAmplitude();
-        // Normalize dBFS (-60..0) -> (0..1)
         final micPeak = _dbToLinear(amp.current);
 
         double bgPeak = 0;
         if (_bgMusicPath != null) {
-          // Approximate bg peak from volume (no direct amplitude API for player)
-          bgPeak = _bgVolume * (0.3 + 0.7 * (0.5 + 0.5 * math.sin(DateTime.now().millisecondsSinceEpoch / 200)));
+          if (_bgWaveformReady) {
+            bgPeak = _sampleBgWaveformPeak();
+          } else {
+            final t = _bgDuration > 0.05
+                ? (_bgPosition % (_bgDuration + 1e-6))
+                : DateTime.now().millisecondsSinceEpoch / 1000.0;
+            final wobble = 0.5 +
+                0.28 * math.sin(t * 2.6) +
+                0.22 * math.sin(t * 5.1 + 0.7);
+            bgPeak = (_bgVolume * wobble).clamp(0.0, 1.0);
+          }
         }
 
         final mixPeak = _isHeadphoneMode
@@ -319,6 +458,10 @@ class _RecorderScreenState extends State<RecorderScreen>
         });
       } catch (_) {}
     });
+    } finally {
+      _recordOpInFlight = false;
+      if (mounted) setState(() {});
+    }
   }
 
   double _dbToLinear(double db) {
@@ -328,63 +471,76 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   Future<void> _stopRecording() async {
-    _amplitudeTimer?.cancel();
-    _recordStopwatch?.stop();
+    if (_recordingState != RecordingState.recording || _recordOpInFlight) return;
+    _recordOpInFlight = true;
+    if (mounted) setState(() {});
 
-    await _bgPlayer.stop();
-    final path = await _recorder.stop();
+    try {
+      _amplitudeTimer?.cancel();
+      _recordStopwatch?.stop();
 
-    // Resample full histories for replay waveform
-    const targetPoints = 300;
-    final micReplay = _resamplePeaks(_micAllHistory, targetPoints);
-    final bgReplay = _resamplePeaks(_bgAllHistory, targetPoints);
-    final mixReplay = _resamplePeaks(_mixAllHistory, targetPoints);
+      await _bgPlayer.stop();
 
-    setState(() {
-      _recordingState = RecordingState.stopped;
-      _recordingPath = path ?? _recordingPath;
-      _micReplay = micReplay;
-      _bgReplay = bgReplay;
-      _mixReplay = mixReplay;
-      _playbackPosition = 0;
-      _playbackDuration = _recordSeconds;
-    });
+      final path = await _recorder.stop();
 
-    if (_recordingPath != null) {
-      try {
-        // Brief delay so the container is fully finalized on Android before ExoPlayer opens it.
-        await Future<void>.delayed(const Duration(milliseconds: 120));
-        await _playbackPlayer.stop();
-        await _playbackPlayer.setAudioSource(
-          AudioSource.file(_recordingPath!),
-        );
-        final duration = _playbackPlayer.duration;
-        if (duration != null) {
-          setState(() => _playbackDuration = duration.inMilliseconds / 1000.0);
+      // Resample full histories for replay waveform
+      const targetPoints = 300;
+      final micReplay = _resamplePeaks(_micAllHistory, targetPoints);
+      final bgReplay = _buildBgReplay(targetPoints);
+      final mixReplay = _resamplePeaks(_mixAllHistory, targetPoints);
+
+      setState(() {
+        _recordingState = RecordingState.stopped;
+        _recordingPath = path ?? _recordingPath;
+        _micReplay = micReplay;
+        _bgReplay = bgReplay;
+        _mixReplay = mixReplay;
+        _playbackPosition = 0;
+        _playbackDuration = _recordSeconds;
+      });
+
+      if (_recordingPath != null) {
+        try {
+          // Brief delay so the container is fully finalized on Android before ExoPlayer opens it.
+          await Future<void>.delayed(const Duration(milliseconds: 120));
+          await _playbackPlayer.stop();
+          await _playbackPlayer.setAudioSource(
+            AudioSource.file(_recordingPath!),
+          );
+          final duration = _playbackPlayer.duration;
+          if (duration != null) {
+            setState(() => _playbackDuration = duration.inMilliseconds / 1000.0);
+          }
+          _playbackDurationSub?.cancel();
+          _playbackDurationSub = _playbackPlayer.durationStream.listen((d) {
+            if (d != null) {
+              setState(() => _playbackDuration = d.inMilliseconds / 1000.0);
+            }
+          });
+          _playbackPositionSub?.cancel();
+          _playbackPositionSub = _playbackPlayer.positionStream.listen((p) {
+            setState(() => _playbackPosition = p.inMilliseconds / 1000.0);
+          });
+          _playbackStateSub?.cancel();
+          _playbackStateSub = _playbackPlayer.playerStateStream.listen((state) {
+            if (!mounted) return;
+            if (state.processingState == ProcessingState.completed) {
+              setState(() => _playbackPosition = 0);
+              _playbackPlayer.seek(Duration.zero);
+            }
+          });
+          _playbackPlayingSub?.cancel();
+          _playbackPlayingSub = _playbackPlayer.playingStream.listen((playing) {
+            if (mounted) setState(() => _isPlaying = playing);
+          });
+          setState(() => _isPlaying = _playbackPlayer.playing);
+        } catch (e) {
+          debugPrint('设置回放失败: $e');
         }
-        _playbackDurationSub?.cancel();
-        _playbackDurationSub = _playbackPlayer.durationStream.listen((d) {
-          if (d != null) {
-            setState(() => _playbackDuration = d.inMilliseconds / 1000.0);
-          }
-        });
-        _playbackPositionSub?.cancel();
-        _playbackPositionSub = _playbackPlayer.positionStream.listen((p) {
-          setState(() => _playbackPosition = p.inMilliseconds / 1000.0);
-        });
-        _playbackStateSub?.cancel();
-        _playbackStateSub = _playbackPlayer.playerStateStream.listen((state) {
-          if (state.processingState == ProcessingState.completed) {
-            setState(() {
-              _isPlaying = false;
-              _playbackPosition = 0;
-            });
-            _playbackPlayer.seek(Duration.zero);
-          }
-        });
-      } catch (e) {
-        debugPrint('设置回放失败: $e');
       }
+    } finally {
+      _recordOpInFlight = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -404,17 +560,45 @@ class _RecorderScreenState extends State<RecorderScreen>
     return out;
   }
 
+  List<double> _buildBgReplay(int targetPoints) {
+    if (_bgMusicPath == null) return _resamplePeaks(_bgAllHistory, targetPoints);
+    final wv = _bgWaveform;
+    if (wv == null || _recordSeconds <= 0 || targetPoints <= 0) {
+      return _resamplePeaks(_bgAllHistory, targetPoints);
+    }
+
+    final out = List<double>.filled(targetPoints, 0);
+    final totalMs = (_recordSeconds * 1000).round();
+    for (var i = 0; i < targetPoints; i++) {
+      final ms = (i * totalMs) ~/ targetPoints;
+      final pos = Duration(milliseconds: ms);
+      var px = wv.positionToPixel(pos).floor();
+      if (px < 0) px = 0;
+      if (px >= wv.length) px = wv.length - 1;
+      final hi = wv.getPixelMax(px).abs().toDouble();
+      final lo = wv.getPixelMin(px).abs().toDouble();
+      final raw = math.max(hi, lo);
+      final norm = (wv.flags & 1) != 0 ? raw / 128.0 : raw / 32768.0;
+      out[i] = (norm * _bgVolume).clamp(0.0, 1.0);
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------------------
   // Playback
   // ---------------------------------------------------------------------------
   Future<void> _togglePlayback() async {
     if (_recordingPath == null) return;
-    if (_isPlaying) {
-      await _playbackPlayer.pause();
-      setState(() => _isPlaying = false);
-    } else {
-      await _playbackPlayer.play();
-      setState(() => _isPlaying = true);
+    try {
+      // Use player.playing + playingStream for UI — avoids first tap showing
+      // "播放" because setState ran before the engine reported playing.
+      if (_playbackPlayer.playing) {
+        await _playbackPlayer.pause();
+      } else {
+        await _playbackPlayer.play();
+      }
+    } catch (e) {
+      _showSnackBar('播放失败: $e');
     }
   }
 
@@ -444,6 +628,12 @@ class _RecorderScreenState extends State<RecorderScreen>
     });
   }
 
+  Future<void> _restartRecording() async {
+    if (_recordOpInFlight) return;
+    _resetRecording();
+    await _startRecording();
+  }
+
   // ---------------------------------------------------------------------------
   // Share recording
   // ---------------------------------------------------------------------------
@@ -455,10 +645,25 @@ class _RecorderScreenState extends State<RecorderScreen>
       return;
     }
     try {
+      final ext = _recordingSaveExtension();
+      final suggestedName = _defaultShareFileName();
+      final inputName = await _promptShareFileName(suggestedName);
+      if (inputName == null) return;
+
+      final normalizedBase = _sanitizeFileName(_stripFileExtension(inputName).trim());
+      if (normalizedBase.isEmpty) {
+        _showSnackBar('文件名不能为空');
+        return;
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final sharePath = '${tempDir.path}/$normalizedBase.$ext';
+      await file.copy(sharePath);
+
       await Share.shareXFiles(
-        [XFile(_recordingPath!, mimeType: 'audio/mp4')],
+        [XFile(sharePath, mimeType: _recordingMimeForShare())],
         subject: '录音分享',
-        text: '录音分享',
+        text: normalizedBase,
       );
     } catch (e) {
       _showSnackBar('分享失败: $e');
@@ -492,7 +697,8 @@ class _RecorderScreenState extends State<RecorderScreen>
         return;
       }
       final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-      final destPath = '${destDir.path}/录音_$timestamp.m4a';
+      final ext = _recordingSaveExtension();
+      final destPath = '${destDir.path}/录音_$timestamp.$ext';
       await src.copy(destPath);
       _showSnackBar('已保存到: $destPath');
     } catch (e) {
@@ -503,6 +709,92 @@ class _RecorderScreenState extends State<RecorderScreen>
   // ---------------------------------------------------------------------------
   // Utilities
   // ---------------------------------------------------------------------------
+  String _defaultShareFileName() {
+    final bgName = _bgMusicName?.trim();
+    if (bgName != null && bgName.isNotEmpty) {
+      return _stripFileExtension(bgName);
+    }
+
+    final recordingPath = _recordingPath;
+    if (recordingPath == null || recordingPath.isEmpty) {
+      return '录音';
+    }
+
+    final fileName = recordingPath.split('/').last;
+    return _stripFileExtension(fileName);
+  }
+
+  String _stripFileExtension(String name) {
+    final dot = name.lastIndexOf('.');
+    if (dot <= 0) return name;
+    return name.substring(0, dot);
+  }
+
+  String _sanitizeFileName(String name) {
+    return name
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  Future<String?> _promptShareFileName(String initialName) async {
+    final controller = TextEditingController(text: initialName);
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF1e1e2e),
+            title: const Text(
+              '分享文件名',
+              style: TextStyle(color: Colors.white),
+            ),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: '请输入文件名',
+                hintStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.45),
+                ),
+                suffixText: '.${_recordingSaveExtension()}',
+                suffixStyle: const TextStyle(color: Colors.white54),
+                enabledBorder: const UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white24),
+                ),
+                focusedBorder: const UnderlineInputBorder(
+                  borderSide: BorderSide(color: Color(0xFFf472b6)),
+                ),
+              ),
+              onSubmitted: (value) {
+                Navigator.of(dialogContext).pop(value.trim());
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(controller.text.trim());
+                },
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFf472b6),
+                  foregroundColor: Colors.white,
+                ),
+                child: const Text('分享'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
   void _showSnackBar(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -539,53 +831,17 @@ class _RecorderScreenState extends State<RecorderScreen>
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final availH = constraints.maxHeight;
             final availW = constraints.maxWidth;
-            final innerH = math.max(0.0, availH - 36);
-            final waveH = (availH * 0.11).clamp(56.0, 118.0);
-            final bgWaveH = (availH * 0.12).clamp(64.0, 130.0);
 
-            return Stack(
-              children: [
-                Positioned(
-                  top: 4,
-                  left: 8,
-                  child: _versionBadge(),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 28, 8, 8),
-                  child: SingleChildScrollView(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(minHeight: innerH),
-                      child: _buildCard(
-                        isRecording: isRecording,
-                        isStopped: isStopped,
-                        layoutWidth: availW - 16,
-                        waveformHeight: waveH,
-                        bgWaveHeight: bgWaveH,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+            return SizedBox.expand(
+              child: _buildCard(
+                isRecording: isRecording,
+                isStopped: isStopped,
+                layoutWidth: availW,
+              ),
             );
           },
         ),
-      ),
-    );
-  }
-
-  Widget _versionBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.5),
-        border: Border.all(color: Colors.white24),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        'v$_kAppVersion',
-        style: const TextStyle(fontSize: 11, color: Colors.white54),
       ),
     );
   }
@@ -594,111 +850,141 @@ class _RecorderScreenState extends State<RecorderScreen>
     required bool isRecording,
     required bool isStopped,
     required double layoutWidth,
-    required double waveformHeight,
-    required double bgWaveHeight,
   }) {
     return Card(
+      margin: EdgeInsets.zero,
       color: const Color(0xFF1e1e2e),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.max,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildTitleRow(isStopped: isStopped),
-            const SizedBox(height: 8),
-            _buildMicWaveform(
-              isRecording: isRecording,
-              height: waveformHeight,
-            ),
-            const SizedBox(height: 4),
-            _buildBgMusicPanel(
-              isRecording: isRecording,
-              waveHeight: bgWaveHeight,
-            ),
-            const SizedBox(height: 4),
-            _buildMixWaveform(height: waveformHeight),
-            const SizedBox(height: 8),
-            if (isStopped && _recordingPath != null) ...[
-              _buildPlaybackBar(),
+        // Card + Padding do not always pass a tight height to Column on web;
+        // without this, Expanded children collapse and the button sits mid-screen.
+        child: SizedBox.expand(
+          child: Column(
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildTitleRow(),
               const SizedBox(height: 8),
+              Expanded(
+                flex: 1,
+                child: LayoutBuilder(
+                  builder: (context, c) => _buildMicWaveform(
+                    isRecording: isRecording,
+                    height: c.maxHeight,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                flex: 1,
+                child: _buildBgMusicPanel(isRecording: isRecording),
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                flex: 1,
+                child: LayoutBuilder(
+                  builder: (context, c) =>
+                      _buildMixWaveform(height: c.maxHeight),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (isStopped && _recordingPath != null) ...[
+                _buildPlaybackBar(),
+                const SizedBox(height: 8),
+              ],
+              _buildTimeAboveControls(isStopped: isStopped),
+              const SizedBox(height: 8),
+              _buildControls(
+                isRecording: isRecording,
+                isStopped: isStopped,
+                maxWidth: layoutWidth - 24,
+              ),
             ],
-            _buildControls(
-              isRecording: isRecording,
-              isStopped: isStopped,
-              maxWidth: layoutWidth - 24,
-            ),
-            const Spacer(),
-          ],
+          ),
         ),
       ),
     );
   }
 
   // --- Title row ---
-  Widget _buildTitleRow({required bool isStopped}) {
-    final timeStr = isStopped && _recordingPath != null
-        ? '${_formatTime(_playbackPosition)} / ${_formatTime(_playbackDuration)}'
-        : _formatTime(_recordSeconds);
-
+  Widget _buildTitleRow() {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        const Icon(Icons.volume_up, color: Color(0xFFf472b6), size: 20),
+        const SizedBox(width: 8),
         Expanded(
           child: Row(
             children: [
-              const Icon(Icons.volume_up, color: Color(0xFFf472b6), size: 20),
-              const SizedBox(width: 8),
-              Flexible(
+              const Flexible(
                 child: Text(
-                  '在线录音',
+                  '伴唱助手',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
                 ),
               ),
-            ],
-          ),
-        ),
-        Flexible(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    timeStr,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontFamily: 'monospace',
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFFf472b6),
-                    ),
-                  ),
+              const SizedBox(width: 6),
+              Text(
+                'v$_kAppVersion',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.white.withValues(alpha: 0.6),
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-              const SizedBox(width: 8),
-              const Icon(Icons.headphones, color: Color(0xFFf472b6), size: 18),
-              const SizedBox(width: 4),
-              Switch(
-                value: _isHeadphoneMode,
-                onChanged: _recordingState == RecordingState.recording
-                    ? null
-                    : (v) => setState(() => _isHeadphoneMode = v),
-                activeThumbColor: const Color(0xFFf472b6),
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
             ],
           ),
         ),
+        const SizedBox(width: 8),
+        const Icon(Icons.headphones, color: Color(0xFFf472b6), size: 18),
+        const SizedBox(width: 4),
+        Text(
+          '耳机模式',
+          style: TextStyle(
+            fontSize: 13,
+            color: Colors.white.withValues(alpha: 0.75),
+          ),
+        ),
+        const SizedBox(width: 2),
+        Switch(
+          value: _isHeadphoneMode,
+          onChanged: _recordingState == RecordingState.recording
+              ? null
+              : (v) => setState(() => _isHeadphoneMode = v),
+          activeThumbColor: const Color(0xFFf472b6),
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
       ],
+    );
+  }
+
+  /// Recording / playback time, shown above the primary control buttons.
+  Widget _buildTimeAboveControls({required bool isStopped}) {
+    final timeStr = isStopped && _recordingPath != null
+        ? '${_formatTime(_playbackPosition)} / ${_formatTime(_playbackDuration)}'
+        : _formatTime(_recordSeconds);
+
+    return Center(
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          timeStr,
+          style: const TextStyle(
+            fontSize: 22,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.w600,
+            color: Color(0xFFf472b6),
+          ),
+        ),
+      ),
     );
   }
 
@@ -718,6 +1004,7 @@ class _RecorderScreenState extends State<RecorderScreen>
       cursorRatio: _recordingState == RecordingState.stopped
           ? _playbackCursorRatio
           : _micHistory.isEmpty ? 0 : _micHistory.length / _historyMax,
+      scrollWhileRecording: true,
       trailing: isRecording
           ? Container(
               width: 8,
@@ -743,6 +1030,7 @@ class _RecorderScreenState extends State<RecorderScreen>
       cursorRatio: _recordingState == RecordingState.stopped
           ? _playbackCursorRatio
           : _mixHistory.isEmpty ? 0 : _mixHistory.length / _historyMax,
+      scrollWhileRecording: true,
     );
   }
 
@@ -756,7 +1044,10 @@ class _RecorderScreenState extends State<RecorderScreen>
     required Color glowColor,
     required double cursorRatio,
     Widget? trailing,
+    bool scrollWhileRecording = false,
   }) {
+    final useScroll =
+        scrollWhileRecording && _recordingState == RecordingState.recording;
     return Container(
       height: height,
       decoration: BoxDecoration(
@@ -774,6 +1065,9 @@ class _RecorderScreenState extends State<RecorderScreen>
                 waveColor: waveColor,
                 glowColor: glowColor,
                 cursorRatio: cursorRatio,
+                scrollMode: useScroll,
+                scrollBufferCapacity: _historyMax,
+                scrollCursorXFactor: 0.5,
               ),
             ),
           ),
@@ -797,180 +1091,183 @@ class _RecorderScreenState extends State<RecorderScreen>
   }
 
   // --- Background music panel ---
-  Widget _buildBgMusicPanel({
-    required bool isRecording,
-    required double waveHeight,
-  }) {
-    return GestureDetector(
-      onTap: _bgMusicPath == null && !isRecording ? _pickBgMusic : null,
-      child: Container(
-        constraints: BoxConstraints(minHeight: waveHeight + 20),
-        decoration: BoxDecoration(
-          color: const Color(0xFF12121f),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Colors.white12),
-        ),
-        clipBehavior: Clip.hardEdge,
-        child: Column(
-          children: [
-            // Waveform area
-            SizedBox(
-              height: waveHeight,
-              child: Stack(
-                children: [
-                  SizedBox.expand(
-                    child: CustomPaint(
-                      painter: WaveformPainter(
-                        history: _recordingState == RecordingState.stopped
-                            ? _bgReplay
-                            : _bgHistory,
-                        waveColor: const Color(0xFF60a5fa),
-                        glowColor: const Color(0xFF3b82f6),
-                        cursorRatio: _recordingState == RecordingState.stopped
-                            ? _playbackCursorRatio
-                            : _bgHistory.isEmpty
-                                ? 0
-                                : _bgHistory.length / _historyMax,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 4,
-                    left: 8,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.music_note,
-                            color: Color(0xFF60a5fa), size: 12),
-                        const SizedBox(width: 4),
-                        const Text('背景音乐',
-                            style: TextStyle(
-                                color: Color(0xFF60a5fa), fontSize: 11)),
-                      ],
-                    ),
-                  ),
-                  if (_bgMusicPath != null)
-                    Positioned(
-                      top: 4,
-                      right: 8,
-                      child: GestureDetector(
-                        onTap: !isRecording ? _removeBgMusic : null,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '移除',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: isRecording
-                                  ? Colors.white30
-                                  : Colors.white70,
-                            ),
-                          ),
+  Widget _buildBgMusicPanel({required bool isRecording}) {
+    return SizedBox.expand(
+      child: GestureDetector(
+        onTap: _bgMusicPath == null && !isRecording ? _pickBgMusic : null,
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF12121f),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.white12),
+          ),
+          clipBehavior: Clip.hardEdge,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    SizedBox.expand(
+                      child: CustomPaint(
+                        painter: WaveformPainter(
+                          history: _recordingState == RecordingState.stopped
+                              ? _bgReplay
+                              : _bgHistory,
+                          waveColor: const Color(0xFF60a5fa),
+                          glowColor: const Color(0xFF3b82f6),
+                          cursorRatio: _recordingState == RecordingState.stopped
+                              ? _playbackCursorRatio
+                              : _bgHistory.isEmpty
+                                  ? 0
+                                  : _bgHistory.length / _historyMax,
+                          scrollMode:
+                              _recordingState == RecordingState.recording,
+                          scrollBufferCapacity: _historyMax,
+                          scrollCursorXFactor: 0.5,
                         ),
                       ),
                     ),
-                  if (_bgMusicPath == null)
-                    Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
+                    Positioned(
+                      top: 4,
+                      left: 8,
+                      child: Row(
                         children: [
-                          const Icon(Icons.add_circle_outline,
-                              color: Colors.white38, size: 20),
-                          const SizedBox(height: 4),
-                          GestureDetector(
-                            onTap: !isRecording ? _pickBgMusic : null,
-                            child: const Text(
-                              '点击选择背景音乐（或接收分享的音频）',
+                          const Icon(Icons.music_note,
+                              color: Color(0xFF60a5fa), size: 12),
+                          const SizedBox(width: 4),
+                          const Text('背景音乐',
                               style: TextStyle(
-                                  color: Color(0xFF60a5fa), fontSize: 12),
-                            ),
-                          ),
+                                  color: Color(0xFF60a5fa), fontSize: 11)),
                         ],
                       ),
                     ),
-                ],
-              ),
-            ),
-
-            // Metadata row (only when bg music is loaded)
-            if (_bgMusicPath != null) ...[
-              Container(
-                color: Colors.black26,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.music_note,
-                            color: Color(0xFF60a5fa), size: 12),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            _bgMusicName ?? '',
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 11),
+                    if (_bgMusicPath != null)
+                      Positioned(
+                        top: 4,
+                        right: 8,
+                        child: GestureDetector(
+                          onTap: !isRecording ? _removeBgMusic : null,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              '移除',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isRecording
+                                    ? Colors.white30
+                                    : Colors.white70,
+                              ),
+                            ),
                           ),
                         ),
-                        Text(
-                          _bgDuration > 0
-                              ? '${_formatTime(_bgPosition)} / ${_formatTime(_bgDuration)}'
-                              : '--:-- / --:--',
-                          style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 11,
-                              color: Colors.white54),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        const Icon(Icons.volume_up,
-                            color: Color(0xFF60a5fa), size: 12),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Slider(
-                            value: _bgVolume,
-                            onChanged: (v) {
-                              setState(() => _bgVolume = v);
-                              _bgPlayer.setVolume(v);
-                            },
-                            min: 0,
-                            max: 1,
-                            activeColor: const Color(0xFF60a5fa),
-                            inactiveColor: Colors.white12,
-                          ),
-                        ),
-                        Text(
-                          '${(_bgVolume * 100).round()}%',
-                          style: const TextStyle(
-                              fontSize: 11, color: Colors.white54),
-                        ),
-                      ],
-                    ),
-                    // Progress bar
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: LinearProgressIndicator(
-                        value: _bgProgressPercent,
-                        backgroundColor: Colors.white12,
-                        valueColor: const AlwaysStoppedAnimation<Color>(
-                            Color(0xFF3b82f6)),
-                        minHeight: 4,
                       ),
-                    ),
+                    if (_bgMusicPath == null)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.add_circle_outline,
+                                  color: Colors.white38, size: 20),
+                              const SizedBox(height: 4),
+                              GestureDetector(
+                                onTap: !isRecording ? _pickBgMusic : null,
+                                child: const Text(
+                                  '点击选择背景音乐（或接收分享的音频）',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Color(0xFF60a5fa),
+                                      fontSize: 12),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
+              if (_bgMusicPath != null)
+                Container(
+                  color: Colors.black26,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.music_note,
+                              color: Color(0xFF60a5fa), size: 12),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              _bgMusicName ?? '',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: Colors.white70, fontSize: 11),
+                            ),
+                          ),
+                          Text(
+                            _bgDuration > 0
+                                ? '${_formatTime(_bgPosition)} / ${_formatTime(_bgDuration)}'
+                                : '--:-- / --:--',
+                            style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                                color: Colors.white54),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Icon(Icons.volume_up,
+                              color: Color(0xFF60a5fa), size: 12),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Slider(
+                              value: _bgVolume,
+                              onChanged: (v) {
+                                setState(() => _bgVolume = v);
+                                _bgPlayer.setVolume(v);
+                              },
+                              min: 0,
+                              max: 1,
+                              activeColor: const Color(0xFF60a5fa),
+                              inactiveColor: Colors.white12,
+                            ),
+                          ),
+                          Text(
+                            '${(_bgVolume * 100).round()}%',
+                            style: const TextStyle(
+                                fontSize: 11, color: Colors.white54),
+                          ),
+                        ],
+                      ),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: _bgProgressPercent,
+                          backgroundColor: Colors.white12,
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                              Color(0xFF3b82f6)),
+                          minHeight: 4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -1012,9 +1309,13 @@ class _RecorderScreenState extends State<RecorderScreen>
       return SizedBox(
         width: double.infinity,
         child: ElevatedButton.icon(
-          onPressed: _stopRecording,
+          onPressed: _recordOpInFlight
+              ? null
+              : () {
+                  unawaited(_stopRecording());
+                },
           icon: const Icon(Icons.stop),
-          label: const Text('停止录制'),
+          label: Text(_recordOpInFlight ? '停止中…' : '停止录制'),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red,
             foregroundColor: Colors.white,
@@ -1033,7 +1334,9 @@ class _RecorderScreenState extends State<RecorderScreen>
       final rerecordBtn = _controlBtn(
         icon: Icons.refresh,
         label: '重录',
-        onTap: _resetRecording,
+        onTap: () {
+          unawaited(_restartRecording());
+        },
       );
       final shareBtn = _controlBtn(
         icon: Icons.share,
@@ -1045,38 +1348,31 @@ class _RecorderScreenState extends State<RecorderScreen>
         label: '保存',
         onTap: _saveRecording,
       );
-      if (maxWidth < 360) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                playBtn,
-                const SizedBox(width: 8),
-                rerecordBtn,
-              ],
+      // Always one row; scale down on very narrow widths instead of wrapping.
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth.isFinite
+              ? constraints.maxWidth
+              : maxWidth;
+          return FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: w,
+              child: Row(
+                children: [
+                  playBtn,
+                  const SizedBox(width: 6),
+                  rerecordBtn,
+                  const SizedBox(width: 6),
+                  shareBtn,
+                  const SizedBox(width: 6),
+                  saveBtn,
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                shareBtn,
-                const SizedBox(width: 8),
-                saveBtn,
-              ],
-            ),
-          ],
-        );
-      }
-      return Row(
-        children: [
-          playBtn,
-          const SizedBox(width: 8),
-          rerecordBtn,
-          const SizedBox(width: 8),
-          shareBtn,
-          const SizedBox(width: 8),
-          saveBtn,
-        ],
+          );
+        },
       );
     }
 
@@ -1084,9 +1380,13 @@ class _RecorderScreenState extends State<RecorderScreen>
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
-        onPressed: _startRecording,
+        onPressed: _recordOpInFlight
+            ? null
+            : () {
+                unawaited(_startRecording());
+              },
         icon: const Icon(Icons.mic),
-        label: const Text('开始录制'),
+        label: Text(_recordOpInFlight ? '准备中…' : '开始录制'),
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFFf472b6),
           foregroundColor: Colors.white,
@@ -1106,7 +1406,7 @@ class _RecorderScreenState extends State<RecorderScreen>
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
           decoration: BoxDecoration(
             color: const Color(0xFF2a2a3e),
             borderRadius: BorderRadius.circular(8),
@@ -1115,10 +1415,15 @@ class _RecorderScreenState extends State<RecorderScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 20, color: Colors.white70),
-              const SizedBox(height: 4),
-              Text(label,
-                  style: const TextStyle(fontSize: 11, color: Colors.white70)),
+              Icon(icon, size: 18, color: Colors.white70),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 10, color: Colors.white70),
+              ),
             ],
           ),
         ),

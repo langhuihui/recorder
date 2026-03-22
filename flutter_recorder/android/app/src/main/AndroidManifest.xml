@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
 
     <application
-        android:label="在线录音"
+        android:label="伴唱助手"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
