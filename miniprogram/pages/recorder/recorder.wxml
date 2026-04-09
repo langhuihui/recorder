@@ -1,0 +1,134 @@
+<wxs module="util">
+var formatTime = function(seconds) {
+  if (seconds === undefined || seconds === null || !isFinite(seconds) || seconds < 0) seconds = 0
+  var m = Math.floor(seconds / 60)
+  var s = Math.floor(seconds % 60)
+  return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s
+}
+module.exports.formatTime = formatTime
+</wxs>
+
+<view class="container">
+  <view class="nav-bar" style="padding-top: {{statusBarHeight}}px;">
+    <view class="nav-content">
+      <view class="nav-left">
+        <image class="nav-icon-img" src="/icons/mic.svg" />
+        <text class="nav-title">伴唱助手</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="bg-section">
+    <view wx:if="{{bgMusicLoaded}}" class="bg-card {{recordingState === 'recording' ? 'bg-card-disabled' : ''}}">
+      <view class="bg-header">
+        <view class="bg-title-row">
+          <text class="label-dot bg-dot"></text>
+          <text class="bg-title">伴奏</text>
+        </view>
+        <text class="remove-btn {{recordingState === 'recording' ? 'remove-btn-disabled' : ''}}" catchtap="removeBgMusic">移除</text>
+      </view>
+
+      <text class="bg-filename">{{bgMusicFileName}}</text>
+
+      <view class="bg-progress-track">
+        <view class="bg-progress-fill" style="width: {{bgProgressPercent}}%"></view>
+      </view>
+
+      <view class="bg-controls-row">
+        <text class="bg-time">{{util.formatTime(bgCurrentTime)}} / {{util.formatTime(bgDuration)}}</text>
+        <image class="vol-icon-img" src="/icons/volume.svg" />
+        <slider class="vol-slider" min="0" max="100" value="{{bgVolume}}" bindchange="onBgVolumeChange"
+          activeColor="#60a5fa" backgroundColor="#2a2a3e" block-size="14"
+          disabled="{{recordingState === 'recording'}}" />
+        <text class="vol-text">{{bgVolume}}%</text>
+      </view>
+
+      <text class="bg-hint" wx:if="{{recordingState === 'recording'}}">录音中已锁定伴奏设置</text>
+      <text class="bg-hint" wx:else>录音前可更换伴奏文件或调整音量</text>
+    </view>
+
+    <view wx:else class="bg-empty {{recordingState === 'recording' ? 'bg-empty-disabled' : ''}}" bindtap="chooseBgMusic">
+      <view class="bg-empty-main">
+        <text class="bg-empty-title">添加伴奏</text>
+        <text class="bg-empty-desc" wx:if="{{recordingState === 'recording'}}">录音中不可添加，请先停止录音</text>
+        <text class="bg-empty-desc" wx:else>从微信聊天中选择音频</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="score-section {{scoreFiles.length ? 'score-section-filled' : ''}}">
+    <view wx:if="{{scoreFiles.length}}" class="score-card score-card-filled">
+      <view class="score-header">
+        <text class="score-filename">已选择 {{scoreFiles.length}} 张歌谱</text>
+        <view class="score-header-actions">
+          <text class="remove-btn" catchtap="chooseScoreFile">重选</text>
+          <text class="remove-btn" catchtap="removeScoreFile">移除</text>
+        </view>
+      </view>
+
+      <scroll-view class="score-list" scroll-y="true">
+        <view wx:for="{{scoreFiles}}" wx:key="path" class="score-item">
+          <text class="score-item-name">第 {{index + 1}}/{{scoreFiles.length}} 页</text>
+          <image class="score-image" src="{{item.path}}" mode="widthFix"></image>
+        </view>
+      </scroll-view>
+
+      <text class="score-hint">歌谱按竖向顺序展示</text>
+    </view>
+
+    <view wx:else class="score-empty" bindtap="chooseScoreFile">
+      <view class="bg-empty-main">
+        <text class="bg-empty-title">添加歌谱</text>
+        <text class="bg-empty-desc">从微信聊天中选择多张图片</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="seek-section" wx:if="{{recordingState === 'stopped' && recordingFilePath}}">
+    <view class="seek-header">
+      <text class="seek-title">回放进度</text>
+      <text class="seek-tip">拖动可快速定位</text>
+    </view>
+    <slider class="seek-slider" min="0" max="{{duration}}" step="0.1" value="{{currentTime}}"
+      bindchange="onSeek" activeColor="#a78bfa" backgroundColor="#2a2a3e"
+      block-size="18" show-value="{{false}}" />
+  </view>
+
+  <view wx:if="{{!scoreFiles.length}}" class="page-spacer"></view>
+
+  <view class="controls">
+    <view wx:if="{{recordingState === 'idle'}}" class="btn-row single">
+      <view class="btn btn-primary" bindtap="startRecording">
+        <view class="record-icon"></view>
+        <text class="btn-text">开始录制</text>
+      </view>
+    </view>
+
+    <view wx:if="{{recordingState === 'recording'}}" class="btn-row single">
+      <view class="btn btn-danger" bindtap="stopRecording">
+        <view class="stop-icon"></view>
+        <text class="btn-text btn-text-timer">{{util.formatTime(duration)}}</text>
+      </view>
+    </view>
+
+    <view wx:if="{{recordingState === 'stopped' && recordingFilePath}}" class="btn-row">
+      <view class="btn btn-secondary" bindtap="togglePlayback">
+        <image class="btn-icon-img" wx:if="{{!isPlaying}}" src="/icons/play.svg" />
+        <image class="btn-icon-img" wx:else src="/icons/pause.svg" />
+        <text class="btn-text">{{isPlaying ? '暂停' : '播放'}}</text>
+      </view>
+      <view class="btn btn-secondary" bindtap="resetRecording">
+        <image class="btn-icon-img" src="/icons/refresh.svg" />
+        <text class="btn-text">重录</text>
+      </view>
+      <view class="btn btn-secondary" bindtap="shareRecording">
+        <image class="btn-icon-img" src="/icons/share.svg" />
+        <text class="btn-text">分享</text>
+      </view>
+      <view class="btn btn-secondary" bindtap="saveRecording">
+        <image class="btn-icon-img" src="/icons/save.svg" />
+        <text class="btn-text">保存</text>
+      </view>
+    </view>
+  </view>
+</view>

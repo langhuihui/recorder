@@ -1,0 +1,14 @@
+{
+  "pages": [
+    "pages/recorder/recorder"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#0f0f1a",
+    "navigationBarTitleText": "录音助手",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#0f0f1a",
+    "backgroundTextStyle": "light"
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2"
+}
