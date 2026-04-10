@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>歌曲管理</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部导航 -->
+    <header class="header">
+      <div class="header-inner">
+        <h1 class="logo">🎵 歌曲管理</h1>
+        <nav class="nav">
+          <button class="nav-btn active" data-view="list">歌曲列表</button>
+          <button class="nav-btn" data-view="albums">专辑</button>
+          <button class="nav-btn" data-view="upload">上传歌曲</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- 歌曲列表视图 -->
+      <section id="view-list" class="view active">
+        <div class="section-header">
+          <h2>全部歌曲</h2>
+          <button class="btn btn-primary" onclick="switchView('upload')">+ 上传新歌曲</button>
+        </div>
+        <div id="song-list" class="song-grid">
+          <div class="loading">加载中...</div>
+        </div>
+        <div id="pagination" class="pagination"></div>
+      </section>
+
+      <!-- 上传歌曲视图 -->
+      <section id="view-upload" class="view">
+        <div class="section-header">
+          <h2>上传新歌曲</h2>
+          <button class="btn btn-ghost" onclick="switchView('list')">← 返回列表</button>
+        </div>
+
+        <!-- 步骤指示器 -->
+        <div class="steps">
+          <div class="step active" data-step="1">
+            <div class="step-num">1</div>
+            <span>基本信息</span>
+          </div>
+          <div class="step-line"></div>
+          <div class="step" data-step="2">
+            <div class="step-num">2</div>
+            <span>歌谱上传</span>
+          </div>
+          <div class="step-line"></div>
+          <div class="step" data-step="3">
+            <div class="step-num">3</div>
+            <span>音频上传</span>
+          </div>
+        </div>
+
+        <!-- 步骤1: 基本信息 -->
+        <div id="step-1" class="step-content active">
+          <div class="card">
+            <div class="form-group">
+              <label class="form-label" for="song-title">歌曲标题 <span class="required">*</span></label>
+              <input type="text" id="song-title" class="form-input" placeholder="请输入歌曲标题">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="song-artist">演唱者/作者</label>
+              <input type="text" id="song-artist" class="form-input" placeholder="请输入演唱者或作者">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="song-desc">描述</label>
+              <textarea id="song-desc" class="form-input form-textarea" placeholder="请输入歌曲描述（可选）"></textarea>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" onclick="createSong()">下一步：上传歌谱 →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 步骤2: 歌谱上传 -->
+        <div id="step-2" class="step-content">
+          <div class="card">
+            <p class="hint">支持上传图片（JPG/PNG/WEBP）或 PDF 文件。PDF 将自动转换为图片。</p>
+
+            <div class="upload-zone" id="sheet-upload-zone">
+              <div class="upload-icon">📄</div>
+              <p>拖拽文件到此处或点击选择</p>
+              <p class="hint">支持 JPG, PNG, WEBP, PDF</p>
+              <input type="file" id="sheet-files" multiple accept="image/*,.pdf" hidden>
+            </div>
+
+            <!-- 歌谱预览 -->
+            <div id="sheet-preview" class="sheet-preview"></div>
+
+            <div class="form-actions">
+              <button class="btn btn-ghost" onclick="goStep(1)">← 上一步</button>
+              <button class="btn btn-primary" onclick="uploadSheets()">上传歌谱并继续 →</button>
+              <button class="btn btn-text" onclick="goStep(3)">跳过此步</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 步骤3: 音频上传 -->
+        <div id="step-3" class="step-content">
+          <div class="card">
+            <p class="hint">伴奏和范唱各支持最多 4 个声部（如：高音、中音、低音、混合）。</p>
+
+            <!-- 伴奏 -->
+            <div class="audio-section">
+              <h3>🎹 伴奏</h3>
+              <div class="parts-container" id="accompaniment-parts">
+                <div class="part-item" data-part="soprano">
+                  <div class="part-header">
+                    <span class="part-label">高音 (Soprano)</span>
+                    <span class="part-status" id="acc-soprano-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="acc-soprano" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('acc-soprano').click()">选择文件</button>
+                    <span class="file-name" id="acc-soprano-name">未选择</span>
+                  </div>
+                </div>
+                <div class="part-item" data-part="alto">
+                  <div class="part-header">
+                    <span class="part-label">中音 (Alto)</span>
+                    <span class="part-status" id="acc-alto-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="acc-alto" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('acc-alto').click()">选择文件</button>
+                    <span class="file-name" id="acc-alto-name">未选择</span>
+                  </div>
+                </div>
+                <div class="part-item" data-part="tenor">
+                  <div class="part-header">
+                    <span class="part-label">次中音 (Tenor)</span>
+                    <span class="part-status" id="acc-tenor-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="acc-tenor" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('acc-tenor').click()">选择文件</button>
+                    <span class="file-name" id="acc-tenor-name">未选择</span>
+                  </div>
+                </div>
+                <div class="part-item" data-part="bass">
+                  <div class="part-header">
+                    <span class="part-label">低音 (Bass)</span>
+                    <span class="part-status" id="acc-bass-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="acc-bass" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('acc-bass').click()">选择文件</button>
+                    <span class="file-name" id="acc-bass-name">未选择</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 范唱 -->
+            <div class="audio-section">
+              <h3>🎤 范唱</h3>
+              <div class="parts-container" id="vocal-parts">
+                <div class="part-item" data-part="soprano">
+                  <div class="part-header">
+                    <span class="part-label">高音 (Soprano)</span>
+                    <span class="part-status" id="voc-soprano-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="voc-soprano" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('voc-soprano').click()">选择文件</button>
+                    <span class="file-name" id="voc-soprano-name">未选择</span>
+                  </div>
+                </div>
+                <div class="part-item" data-part="alto">
+                  <div class="part-header">
+                    <span class="part-label">中音 (Alto)</span>
+                    <span class="part-status" id="voc-alto-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="voc-alto" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('voc-alto').click()">选择文件</button>
+                    <span class="file-name" id="voc-alto-name">未选择</span>
+                  </div>
+                </div>
+                <div class="part-item" data-part="tenor">
+                  <div class="part-header">
+                    <span class="part-label">次中音 (Tenor)</span>
+                    <span class="part-status" id="voc-tenor-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="voc-tenor" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('voc-tenor').click()">选择文件</button>
+                    <span class="file-name" id="voc-tenor-name">未选择</span>
+                  </div>
+                </div>
+                <div class="part-item" data-part="bass">
+                  <div class="part-header">
+                    <span class="part-label">低音 (Bass)</span>
+                    <span class="part-status" id="voc-bass-status"></span>
+                  </div>
+                  <div class="part-upload">
+                    <input type="file" id="voc-bass" accept="audio/*" hidden>
+                    <button class="btn btn-sm btn-outline" onclick="document.getElementById('voc-bass').click()">选择文件</button>
+                    <span class="file-name" id="voc-bass-name">未选择</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button class="btn btn-ghost" onclick="goStep(2)">← 上一步</button>
+              <button class="btn btn-primary" onclick="uploadAudio()">上传音频并完成 ✓</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 完成提示 -->
+        <div id="step-done" class="step-content">
+          <div class="card done-card">
+            <div class="done-icon">✅</div>
+            <h3>上传完成！</h3>
+            <p id="done-message">歌曲已成功上传。</p>
+            <div class="form-actions">
+              <button class="btn btn-primary" onclick="resetUpload(); switchView('list')">返回列表</button>
+              <button class="btn btn-outline" onclick="resetUpload()">继续上传</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 歌曲详情视图 -->
+      <section id="view-detail" class="view">
+        <div class="section-header">
+          <h2 id="detail-title">歌曲详情</h2>
+          <button class="btn btn-ghost" id="detail-back-btn" onclick="switchView('list')">← 返回列表</button>
+        </div>
+        <div id="detail-content"></div>
+      </section>
+
+      <!-- 专辑列表视图 -->
+      <section id="view-albums" class="view">
+        <div class="section-header">
+          <h2>全部专辑</h2>
+          <button class="btn btn-primary" onclick="switchView('create-album')">+ 创建专辑</button>
+        </div>
+        <div id="album-list" class="album-grid">
+          <div class="loading">加载中...</div>
+        </div>
+        <div id="album-pagination" class="pagination"></div>
+      </section>
+
+      <!-- 创建/编辑专辑视图 -->
+      <section id="view-create-album" class="view">
+        <div class="section-header">
+          <h2 id="album-form-title">创建专辑</h2>
+          <button class="btn btn-ghost" onclick="switchView('albums')">← 返回专辑列表</button>
+        </div>
+        <div class="card">
+          <div class="form-group">
+            <label class="form-label" for="album-title">专辑标题 <span class="required">*</span></label>
+            <input type="text" id="album-title" class="form-input" placeholder="请输入专辑标题">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="album-desc">描述</label>
+            <textarea id="album-desc" class="form-input form-textarea" placeholder="请输入专辑描述（可选）"></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">封面图片</label>
+            <div class="album-cover-upload" id="album-cover-zone">
+              <div id="album-cover-preview" class="album-cover-preview">
+                <div class="upload-icon">🖼️</div>
+                <p>点击选择封面图片</p>
+              </div>
+              <input type="file" id="album-cover-input" accept="image/*" hidden>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">添加歌曲</label>
+            <div class="album-song-picker">
+              <input type="text" id="album-song-search" class="form-input" placeholder="搜索歌曲标题...">
+              <div id="album-song-candidates" class="album-song-candidates"></div>
+              <div id="album-selected-songs" class="album-selected-songs"></div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-ghost" onclick="switchView('albums')">取消</button>
+            <button class="btn btn-primary" id="album-submit-btn" onclick="submitAlbum()">创建专辑</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 专辑详情视图 -->
+      <section id="view-album-detail" class="view">
+        <div class="section-header">
+          <h2 id="album-detail-title">专辑详情</h2>
+          <button class="btn btn-ghost" onclick="switchView('albums')">← 返回专辑列表</button>
+        </div>
+        <div id="album-detail-content"></div>
+      </section>
+    </main>
+
+    <!-- 全局 Toast -->
+    <div id="toast-container"></div>
+
+    <!-- 上传进度覆盖层 -->
+    <div id="upload-overlay" class="overlay hidden">
+      <div class="overlay-content">
+        <div class="spinner"></div>
+        <p id="upload-progress-text">正在上传...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" id="upload-progress-bar"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

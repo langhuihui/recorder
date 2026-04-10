@@ -1,0 +1,27 @@
+{
+  "name": "song-manager",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler pages dev",
+    "build": "node build.mjs",
+    "deploy": "wrangler pages deploy dist",
+    "db:migrate": "wrangler d1 execute song-db --local --file=./migrations/0001_init.sql && wrangler d1 execute song-db --local --file=./migrations/0002_albums.sql",
+    "db:migrate:remote": "wrangler d1 execute song-db --remote --file=./migrations/0001_init.sql && wrangler d1 execute song-db --remote --file=./migrations/0002_albums.sql"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.9.124"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd",
+      "sharp"
+    ]
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250327.0",
+    "wrangler": "^4.6.0",
+    "esbuild": "^0.25.0"
+  }
+}
