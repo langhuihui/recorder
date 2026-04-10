@@ -2,7 +2,7 @@
 import Layout from '../../layouts/Layout.astro';
 ---
 
-<Layout title="专辑" description="亚萨诗班专辑列表 — 聆听神的荣耀">
+<Layout title="Albums" description="Asaph Choir Albums — Listen to God's Glory">
   <!-- Page Hero -->
   <div class="page-hero" id="pageHero">
     <div class="container">
@@ -76,8 +76,6 @@ import Layout from '../../layouts/Layout.astro';
 <script>
   let songs: any[] = [];
   let currentSongIndex = -1;
-  let currentTrackType = 'accompaniment';
-  let currentPart: string | null = null;
   let audio = new Audio();
   let isPlaying = false;
   let currentAlbumId: string | null = null;
@@ -236,6 +234,15 @@ import Layout from '../../layouts/Layout.astro';
     return song.tracks && song.tracks.length > 0;
   }
 
+  /** 专辑欣赏：优先伴奏轨 part_name=default，否则首条音轨（与后台「欣赏音频」一致） */
+  function pickAlbumPlaybackTrack(song: any) {
+    const tracks = song.tracks || [];
+    if (!tracks.length) return null;
+    const d = tracks.find((t: any) => t.track_type === 'accompaniment' && t.part_name === 'default');
+    if (d) return d;
+    return tracks[0];
+  }
+
   function playSong(index: number) {
     if (index < 0 || index >= songs.length) return;
     currentSongIndex = index;
@@ -244,63 +251,22 @@ import Layout from '../../layouts/Layout.astro';
     playerPanel.style.display = 'block';
     document.getElementById('nowPlayingName')!.textContent = song.title;
     document.getElementById('nowPlayingArtist')!.textContent = song.artist || '';
-    const types = [...new Set((song.tracks || []).map((t: any) => t.track_type))] as string[];
-    if (!types.includes(currentTrackType)) currentTrackType = types[0] || 'accompaniment';
-    renderTrackTypeTabs(song, types);
-    renderPartTabs(song);
-    selectTrack(song);
-    renderSongList();
-  }
-
-  function renderTrackTypeTabs(song: any, types: string[]) {
-    const labels: Record<string,string> = { accompaniment: '<i class="icon icon-piano"></i> 伴奏', vocal: '<i class="icon icon-mic"></i> 范唱' };
-    const el = document.getElementById('trackTypeTabs')!;
-    el.innerHTML = types.map(t =>
-      `<button class="track-tab${t === currentTrackType ? ' active' : ''}" onclick="switchTrackType('${t}')">${labels[t] || t}</button>`
-    ).join('');
-  }
-
-  function switchTrackType(type: string) {
-    currentTrackType = type;
-    currentPart = null;
-    if (currentSongIndex >= 0) {
-      const song = songs[currentSongIndex];
-      const types = [...new Set((song.tracks || []).map((t: any) => t.track_type))] as string[];
-      renderTrackTypeTabs(song, types);
-      renderPartTabs(song);
-      selectTrack(song);
+    document.getElementById('trackTypeTabs')!.innerHTML = '';
+    document.getElementById('partTabs')!.innerHTML = '';
+    const track = pickAlbumPlaybackTrack(song);
+    if (!track) {
+      audio.pause();
+      audio.src = '';
+      isPlaying = false;
+      document.getElementById('btnPlay')!.textContent = '▶';
+      renderSongList();
+      return;
     }
-  }
-
-  function renderPartTabs(song: any) {
-    const tracks = (song.tracks || []).filter((t: any) => t.track_type === currentTrackType);
-    const parts = tracks.map((t: any) => t.part_name);
-    if (!currentPart || !parts.includes(currentPart)) currentPart = parts[0] || null;
-    const labels: Record<string,string> = { soprano: '高音', alto: '中音', tenor: '次中音', bass: '低音', default: '默认' };
-    const el = document.getElementById('partTabs')!;
-    if (parts.length <= 1) { el.innerHTML = ''; return; }
-    el.innerHTML = parts.map((p: string) =>
-      `<button class="track-tab${p === currentPart ? ' active' : ''}" onclick="switchPart('${p}')">${labels[p] || p}</button>`
-    ).join('');
-  }
-
-  function switchPart(part: string) {
-    currentPart = part;
-    if (currentSongIndex >= 0) {
-      const song = songs[currentSongIndex];
-      renderPartTabs(song);
-      selectTrack(song);
-    }
-  }
-
-  function selectTrack(song: any) {
-    const tracks = (song.tracks || []).filter((t: any) => t.track_type === currentTrackType);
-    const track = currentPart ? tracks.find((t: any) => t.part_name === currentPart) || tracks[0] : tracks[0];
-    if (!track) return;
     audio.src = track.url;
     audio.play().then(() => { isPlaying = true; document.getElementById('btnPlay')!.textContent = '⏸'; }).catch(() => {});
     isPlaying = true;
     document.getElementById('btnPlay')!.textContent = '⏸';
+    renderSongList();
   }
 
   // Audio events
@@ -357,8 +323,6 @@ import Layout from '../../layouts/Layout.astro';
   (window as any).loadAlbums = loadAlbums;
   (window as any).goBackToList = goBackToList;
   (window as any).playSong = playSong;
-  (window as any).switchTrackType = switchTrackType;
-  (window as any).switchPart = switchPart;
 
   // Init
   const initialId = getAlbumIdFromUrl();

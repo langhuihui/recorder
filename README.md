@@ -1,6 +1,6 @@
-# 🎵 亚萨诗班官方网站
+# 🎵 Asaph Choir Official Website
 
-基于 Astro + Cloudflare Pages + R2 + D1 构建的亚萨诗班（Asaph Choir）官方网站。
+基于 Astro + Cloudflare Pages + R2 + D1 构建的 Asaph Choir 官方网站。
 
 ## 功能特性
 

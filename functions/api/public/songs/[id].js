@@ -30,6 +30,9 @@ export async function onRequestGet(context) {
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
+    if (song.song_kind !== 'practice') {
+      return json({ error: '该资源为专辑欣赏内容，请从专辑页面收听' }, 404);
+    }
 
     // 获取歌谱图片
     const sheets = await env.ASC_DB.prepare(

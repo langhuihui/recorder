@@ -63,7 +63,131 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
     </div>
     <div id="album-detail-content"></div>
   </div>
+
+  <!-- 封面裁剪弹框 -->
+  <div id="crop-modal" class="crop-modal" style="display:none">
+    <div class="crop-modal-backdrop"></div>
+    <div class="crop-modal-content">
+      <div class="crop-modal-header">
+        <h3>裁剪封面图片</h3>
+        <button class="btn btn-ghost btn-sm" id="crop-modal-close">✕</button>
+      </div>
+      <div class="crop-modal-body">
+        <p class="crop-hint">拖动调整裁剪区域，裁剪为正方形封面</p>
+        <div class="crop-container" id="crop-container">
+          <img id="crop-image" alt="裁剪预览">
+          <div class="crop-overlay" id="crop-overlay"></div>
+          <div class="crop-selection" id="crop-selection">
+            <div class="crop-handle crop-handle-tl"></div>
+            <div class="crop-handle crop-handle-tr"></div>
+            <div class="crop-handle crop-handle-bl"></div>
+            <div class="crop-handle crop-handle-br"></div>
+          </div>
+        </div>
+      </div>
+      <div class="crop-modal-footer">
+        <button class="btn btn-ghost" id="crop-cancel">取消</button>
+        <button class="btn btn-primary" id="crop-confirm">确认裁剪</button>
+      </div>
+    </div>
+  </div>
 </AdminLayout>
+
+<style>
+  .crop-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .crop-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+  }
+  .crop-modal-content {
+    position: relative;
+    background: var(--bg-card);
+    border-radius: var(--radius-lg, 12px);
+    max-width: 560px;
+    width: 95%;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .crop-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .crop-modal-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .crop-modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .crop-hint {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin: 0 0 12px 0;
+  }
+  .crop-container {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    max-width: 100%;
+    overflow: hidden;
+    background: #000;
+    border-radius: var(--radius);
+  }
+  .crop-container img {
+    display: block;
+    max-width: 100%;
+    max-height: 60vh;
+  }
+  .crop-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    pointer-events: none;
+  }
+  .crop-selection {
+    position: absolute;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+    cursor: move;
+  }
+  .crop-handle {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border: 1px solid rgba(0,0,0,0.3);
+    border-radius: 2px;
+  }
+  .crop-handle-tl { top: -6px; left: -6px; cursor: nw-resize; }
+  .crop-handle-tr { top: -6px; right: -6px; cursor: ne-resize; }
+  .crop-handle-bl { bottom: -6px; left: -6px; cursor: sw-resize; }
+  .crop-handle-br { bottom: -6px; right: -6px; cursor: se-resize; }
+  .crop-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+  }
+</style>
 
 <script>
   const API = '/api';
@@ -318,15 +442,179 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
     zone.addEventListener('click', () => input.click());
     input.addEventListener('change', () => {
       const f = input.files?.[0];
-      if (f && f.type.startsWith('image/')) { albumCoverFile = f; renderCoverPreview(); }
+      if (f && f.type.startsWith('image/')) {
+        openCropModal(f);
+      }
       input.value = '';
     });
+
+    // 裁剪弹框按钮
+    document.getElementById('crop-cancel')!.addEventListener('click', closeCropModal);
+    document.getElementById('crop-modal-close')!.addEventListener('click', closeCropModal);
+    document.getElementById('crop-confirm')!.addEventListener('click', confirmCrop);
+  }
+
+  // ===== 裁剪相关 =====
+  let cropSourceFile: File | null = null;
+  let cropImageData: { img: HTMLImageElement; scale: number } | null = null;
+  let cropState: { x: number; y: number; size: number } | null = null;
+  let cropDrag: { type: 'move' | 'resize'; startX: number; startY: number; origX: number; origY: number; origSize: number } | null = null;
+
+  function openCropModal(file: File) {
+    cropSourceFile = file;
+    const modal = document.getElementById('crop-modal')!;
+    const img = document.getElementById('crop-image') as HTMLImageElement;
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const container = document.getElementById('crop-container')!;
+      const containerW = container.clientWidth;
+      const imgW = img.naturalWidth;
+      const imgH = img.naturalHeight;
+      const displayScale = Math.min(containerW / imgW, 1);
+      const dispW = imgW * displayScale;
+      const dispH = imgH * displayScale;
+      img.style.width = dispW + 'px';
+      img.style.height = dispH + 'px';
+
+      cropImageData = { img, scale: displayScale };
+
+      // 默认裁剪区域：居中最大正方形
+      const minDim = Math.min(dispW, dispH);
+      const initSize = minDim * 0.8;
+      cropState = {
+        x: (dispW - initSize) / 2,
+        y: (dispH - initSize) / 2,
+        size: initSize,
+      };
+      renderCropSelection();
+      initCropDrag();
+    };
+    img.src = url;
+    modal.style.display = 'flex';
+  }
+
+  function closeCropModal() {
+    document.getElementById('crop-modal')!.style.display = 'none';
+    cropSourceFile = null;
+    cropImageData = null;
+    cropState = null;
+    cropDrag = null;
+  }
+
+  function renderCropSelection() {
+    if (!cropState) return;
+    const sel = document.getElementById('crop-selection')!;
+    sel.style.left = cropState.x + 'px';
+    sel.style.top = cropState.y + 'px';
+    sel.style.width = cropState.size + 'px';
+    sel.style.height = cropState.size + 'px';
+  }
+
+  function initCropDrag() {
+    const sel = document.getElementById('crop-selection')!;
+    const container = document.getElementById('crop-container')!;
+
+    const getPos = (e: MouseEvent | TouchEvent) => {
+      if ('touches' in e) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      return { x: e.clientX, y: e.clientY };
+    };
+
+    const onStart = (type: 'move' | 'resize', e: MouseEvent | TouchEvent) => {
+      e.preventDefault();
+      const pos = getPos(e);
+      cropDrag = {
+        type,
+        startX: pos.x,
+        startY: pos.y,
+        origX: cropState!.x,
+        origY: cropState!.y,
+        origSize: cropState!.size,
+      };
+    };
+
+    sel.addEventListener('mousedown', (e) => { onStart('move', e); });
+    sel.addEventListener('touchstart', (e) => { onStart('move', e); }, { passive: false });
+
+    sel.querySelectorAll('.crop-handle').forEach(handle => {
+      handle.addEventListener('mousedown', (e) => { e.stopPropagation(); onStart('resize', e); });
+      handle.addEventListener('touchstart', (e) => { e.stopPropagation(); onStart('resize', e); }, { passive: false });
+    });
+
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      if (!cropDrag || !cropState || !cropImageData) return;
+      e.preventDefault();
+      const pos = getPos(e);
+      const dx = pos.x - cropDrag.startX;
+      const dy = pos.y - cropDrag.startY;
+      const img = cropImageData.img;
+      const maxW = img.clientWidth;
+      const maxH = img.clientHeight;
+
+      if (cropDrag.type === 'move') {
+        let nx = cropDrag.origX + dx;
+        let ny = cropDrag.origY + dy;
+        nx = Math.max(0, Math.min(nx, maxW - cropDrag.origSize));
+        ny = Math.max(0, Math.min(ny, maxH - cropDrag.origSize));
+        cropState.x = nx;
+        cropState.y = ny;
+      } else {
+        // 正方形裁剪：取 dx/dy 中绝对值较大的方向，对角线缩放
+        const delta = (Math.abs(dx) > Math.abs(dy) ? dx : dy);
+        let newSize = cropDrag.origSize + delta;
+        newSize = Math.max(50, newSize);
+        // 右下角固定时，调整大小后不能超出图片边界
+        if (cropDrag.origX + newSize > maxW) newSize = maxW - cropDrag.origX;
+        if (cropDrag.origY + newSize > maxH) newSize = maxH - cropDrag.origY;
+        newSize = Math.max(50, newSize);
+        cropState.size = newSize;
+      }
+      renderCropSelection();
+    };
+
+    const onEnd = () => { cropDrag = null; };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd);
+  }
+
+  function confirmCrop() {
+    if (!cropImageData || !cropState || !cropSourceFile) return;
+    const { img, scale } = cropImageData;
+    const { x, y, size } = cropState;
+
+    // 将显示坐标转为原图坐标
+    const sx = x / scale;
+    const sy = y / scale;
+    const sSize = size / scale;
+
+    const canvas = document.createElement('canvas');
+    const outputSize = Math.min(1024, Math.round(sSize));
+    canvas.width = outputSize;
+    canvas.height = outputSize;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, sx, sy, sSize, sSize, 0, 0, outputSize, outputSize);
+
+    canvas.toBlob((blob) => {
+      if (!blob) { toast('裁剪失败', 'error'); return; }
+      const ext = cropSourceFile!.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+      albumCoverFile = new File([blob], `cover_cropped.${ext === 'png' ? 'png' : 'jpg'}`, { type: mimeType });
+      renderCoverPreview();
+      closeCropModal();
+      toast('封面已裁剪', 'success');
+    }, 'image/jpeg', 0.92);
   }
 
   async function searchSongsForAlbum(query: string) {
     const candidatesEl = document.getElementById('album-song-candidates')!;
     if (allSongsCache.length === 0) {
-      const res = await fetch(`${API}/songs?page=1&limit=100`);
+      const res = await fetch(`${API}/songs?page=1&limit=100&song_kind=album`);
       const { data } = await res.json();
       allSongsCache = data || [];
     }

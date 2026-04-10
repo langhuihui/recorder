@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler pages dev --command=\"astro dev\" --port 4321",
+    "dev": "astro build && wrangler pages dev --command=\"astro dev\" --port 4321",
+    "dev:astro": "astro dev --port 4321",
     "build": "astro build",
     "preview": "astro preview",
     "deploy": "astro build && wrangler pages deploy dist",

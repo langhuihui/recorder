@@ -2,13 +2,14 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="亚萨诗班" description="亚萨诗班 — 以歌声荣耀神，以赞美敬拜主">
+<Layout title="Asaph Choir" description="Asaph Choir — Glorify God with Song, Worship the Lord with Praise">
   <!-- Hero Section -->
   <section class="hero">
     <div class="hero-bg"></div>
+    <div class="hero-rays" aria-hidden="true"></div>
     <div class="container">
       <div class="hero-content">
-        <div class="hero-eyebrow">亚萨诗班</div>
+        <div class="hero-eyebrow">Asaph Choir</div>
         <h1>以歌声<em>荣耀神</em><br/>以赞美敬拜主</h1>
         <p class="hero-verse">
           "你们当用诗篇、颂词、灵歌彼此对说，口唱心和地赞美主。"
@@ -19,6 +20,7 @@ import Layout from '../layouts/Layout.astro';
           <a href="#about" class="btn btn-outline-light btn-lg">了解我们</a>
         </div>
       </div>
+      <img class="hero-music-stand" src="/img/music-stand.svg" alt="" aria-hidden="true" />
     </div>
   </section>
 
@@ -27,14 +29,14 @@ import Layout from '../layouts/Layout.astro';
     <div class="container">
       <div class="about-grid">
         <div class="about-img">
-          <img src="/img/choir.jpg" alt="亚萨诗班合唱" onerror="this.parentElement.innerHTML='<div class=\'about-img-placeholder\'><i class=\'icon icon-music2 icon-3xl\'></i></div>'" />
+          <img src="/img/choir.jpg" alt="Asaph Choir" onerror="this.parentElement.innerHTML='&lt;div class=&quot;about-img-placeholder&quot;&gt;&lt;i class=&quot;icon icon-music2 icon-3xl&quot;&gt;&lt;/i&gt;&lt;/div&gt;'" />
         </div>
         <div class="about-text">
           <div class="section-eyebrow">关于我们</div>
-          <h2>亚萨诗班</h2>
+          <h2>Asaph Choir</h2>
           <p>
-            亚萨（Asaph）是圣经中蒙神拣选的利未族歌唱领班，诗篇中有多篇归于他名下。
-            以他命名的亚萨诗班，承继这份蒙恩的使命——以诗歌赞美、以歌声敬拜、以声音传递神的荣耀与慈爱。
+            Asaph was a Levite chosen by God to lead singing in the Bible, with several Psalms attributed to him.
+            The Asaph Choir, named after him, inherits this blessed mission — to praise with hymns, to worship with song, and to proclaim God's glory and love through voice.
           </p>
           <p>
             我们相信，音乐是神赐予人类最珍贵的礼物之一，是连接心灵与神的桥梁。
@@ -159,4 +161,5 @@ import Layout from '../layouts/Layout.astro';
       container.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="icon icon-music icon-3xl"></i></div><p>专辑即将上线，敬请期待</p></div>';
     }
   }
-  l
+  loadHomeAlbums();
+</script>

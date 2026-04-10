@@ -104,15 +104,19 @@ export async function onRequestDelete(context) {
     // 获取所有关联文件
     const sheets = await env.ASC_DB.prepare('SELECT file_key FROM sheet_images WHERE song_id = ?').bind(id).all();
     const tracks = await env.ASC_DB.prepare('SELECT file_key FROM audio_tracks WHERE song_id = ?').bind(id).all();
+    const practiceRows = await env.ASC_DB.prepare('SELECT file_key FROM practice_files WHERE song_id = ?').bind(id).all();
 
     // 从 R2 删除文件
     const fileKeys = [
       ...sheets.results.map(s => s.file_key),
       ...tracks.results.map(t => t.file_key),
+      ...practiceRows.results.map(p => p.file_key),
     ];
     await Promise.all(fileKeys.map(key => env.ASC_BUCKET.delete(key)));
 
-    // 从 D1 删除记录（CASCADE 会自动删除关联记录）
+    await env.ASC_DB.prepare('DELETE FROM practice_files WHERE song_id = ?').bind(id).run();
+
+    // 从 D1 删除记录（CASCADE 会自动删除 sheet_images、audio_tracks）
     await env.ASC_DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
 
     return json({ message: '删除成功' });

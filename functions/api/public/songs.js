@@ -28,9 +28,11 @@ export async function onRequestGet(context) {
   const baseUrl = url.origin;
 
   try {
-    const countResult = await env.ASC_DB.prepare('SELECT COUNT(*) as total FROM songs').first();
+    const countResult = await env.ASC_DB.prepare(
+      "SELECT COUNT(*) as total FROM songs WHERE song_kind = 'practice'"
+    ).first();
     const songs = await env.ASC_DB.prepare(
-      'SELECT * FROM songs ORDER BY created_at DESC LIMIT ? OFFSET ?'
+      "SELECT * FROM songs WHERE song_kind = 'practice' ORDER BY created_at DESC LIMIT ? OFFSET ?"
     ).bind(limit, offset).all();
 
     const songList = await Promise.all(songs.results.map(async (song) => {

@@ -1,5 +1,5 @@
 /* ===================================================
-   亚萨诗班 — 全站样式
+   Asaph Choir — Global Styles
    =================================================== */
 
 /* ---- CSS Variables ---- */
@@ -337,6 +337,13 @@ input, textarea, select { font-family: inherit; font-size: 1rem; }
   opacity: 0.3;
   z-index: 0;
 }
+.hero-rays {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: url('/img/light-rays.svg') no-repeat center / cover;
+  pointer-events: none;
+}
 .hero-content {
   position: relative;
   z-index: 1;
@@ -388,6 +395,16 @@ input, textarea, select { font-family: inherit; font-size: 1rem; }
   gap: 16px;
   justify-content: center;
   flex-wrap: wrap;
+}
+.hero-music-stand {
+  position: absolute;
+  right: 5%;
+  bottom: 8%;
+  width: clamp(120px, 18vw, 220px);
+  color: rgba(201, 160, 74, 0.25);
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Sections */

@@ -47,9 +47,13 @@ export async function onRequestPost(context) {
 
     const stmts = [];
     for (const songId of song_ids) {
-      // 验证歌曲存在
-      const song = await env.ASC_DB.prepare('SELECT id FROM songs WHERE id = ?').bind(songId).first();
-      if (!song) continue;
+      const song = await env.ASC_DB.prepare('SELECT id, song_kind FROM songs WHERE id = ?').bind(songId).first();
+      if (!song) {
+        return json({ error: `歌曲不存在: ${songId}` }, 400);
+      }
+      if (song.song_kind !== 'album') {
+        return json({ error: '只能将「专辑歌曲」加入专辑，练唱歌曲请使用练唱管理' }, 400);
+      }
 
       // 检查是否已存在
       const existing = await env.ASC_DB.prepare(

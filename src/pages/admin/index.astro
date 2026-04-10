@@ -6,8 +6,13 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
   <div class="stats-grid" id="statsGrid">
     <div class="stat-card">
       <div class="stat-icon"><i class="icon icon-music icon-xl"></i></div>
-      <div class="stat-value" id="statSongs">—</div>
-      <div class="stat-label">歌曲总数</div>
+      <div class="stat-value" id="statAlbumSongs">—</div>
+      <div class="stat-label">专辑歌曲</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon"><i class="icon icon-folder icon-xl"></i></div>
+      <div class="stat-value" id="statPracticeSongs">—</div>
+      <div class="stat-label">练唱歌曲</div>
     </div>
     <div class="stat-card">
       <div class="stat-icon"><i class="icon icon-disc icon-xl"></i></div>
@@ -19,9 +24,9 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
   <div class="card">
     <div class="card-title">快捷操作</div>
     <div class="form-actions">
-      <a href="/admin/songs" class="btn btn-primary"><i class="icon icon-music"></i> 管理歌曲</a>
+      <a href="/admin/songs" class="btn btn-primary"><i class="icon icon-music"></i> 专辑歌曲</a>
       <a href="/admin/albums" class="btn btn-outline"><i class="icon icon-disc"></i> 管理专辑</a>
-      <a href="/admin/practice" class="btn btn-outline"><i class="icon icon-folder"></i> 练唱文件</a>
+      <a href="/admin/practice" class="btn btn-outline"><i class="icon icon-folder"></i> 练唱歌曲</a>
       <a href="/albums" class="btn btn-ghost" target="_blank"><i class="icon icon-globe"></i> 查看前台</a>
     </div>
   </div>
@@ -40,13 +45,16 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
 <script>
   async function loadStats() {
     try {
-      const [songsRes, albumsRes] = await Promise.all([
-        fetch('/api/songs?limit=1'),
+      const [albumSongsRes, practiceSongsRes, albumsRes] = await Promise.all([
+        fetch('/api/songs?limit=1&song_kind=album'),
+        fetch('/api/songs?limit=1&song_kind=practice'),
         fetch('/api/albums?limit=1'),
       ]);
-      const songs = await songsRes.json();
+      const albumSongs = await albumSongsRes.json();
+      const practiceSongs = await practiceSongsRes.json();
       const albums = await albumsRes.json();
-      document.getElementById('statSongs')!.textContent = songs.pagination?.total ?? '—';
+      document.getElementById('statAlbumSongs')!.textContent = albumSongs.pagination?.total ?? '—';
+      document.getElementById('statPracticeSongs')!.textContent = practiceSongs.pagination?.total ?? '—';
       document.getElementById('statAlbums')!.textContent = albums.pagination?.total ?? '—';
     } catch {}
   }
