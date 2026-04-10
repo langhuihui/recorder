@@ -25,7 +25,7 @@ export async function onRequestPost(context) {
 
   try {
     // 验证歌曲存在
-    const song = await env.DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
+    const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
@@ -78,18 +78,18 @@ async function uploadSheetImage(env, file, songId) {
 
   // 上传到 R2
   const arrayBuffer = await file.arrayBuffer();
-  await env.SONG_BUCKET.put(fileKey, arrayBuffer, {
+  await env.ASC_BUCKET.put(fileKey, arrayBuffer, {
     httpMetadata: { contentType: file.type },
   });
 
   // 获取当前最大排序值
-  const maxOrder = await env.DB.prepare(
+  const maxOrder = await env.ASC_DB.prepare(
     'SELECT MAX(sort_order) as max_order FROM sheet_images WHERE song_id = ?'
   ).bind(songId).first();
   const sortOrder = (maxOrder?.max_order ?? -1) + 1;
 
   // 插入数据库
-  await env.DB.prepare(
+  await env.ASC_DB.prepare(
     'INSERT INTO sheet_images (id, song_id, file_key, sort_order) VALUES (?, ?, ?, ?)'
   ).bind(id, songId, fileKey, sortOrder).run();
 
@@ -103,27 +103,27 @@ async function uploadAudioTrack(env, file, songId, trackType, partName) {
 
   // 上传到 R2
   const arrayBuffer = await file.arrayBuffer();
-  await env.SONG_BUCKET.put(fileKey, arrayBuffer, {
+  await env.ASC_BUCKET.put(fileKey, arrayBuffer, {
     httpMetadata: { contentType: file.type || 'audio/mpeg' },
   });
 
   // 检查是否已存在同类型同声部
-  const existing = await env.DB.prepare(
+  const existing = await env.ASC_DB.prepare(
     'SELECT id, file_key FROM audio_tracks WHERE song_id = ? AND track_type = ? AND part_name = ?'
   ).bind(songId, trackType, partName).first();
 
   if (existing) {
     // 删除旧文件
-    await env.SONG_BUCKET.delete(existing.file_key);
+    await env.ASC_BUCKET.delete(existing.file_key);
     // 更新记录
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       'UPDATE audio_tracks SET file_key = ?, file_size = ? WHERE id = ?'
     ).bind(fileKey, arrayBuffer.byteLength, existing.id).run();
     return { id: existing.id, type: trackType, part_name: partName, file_key: fileKey, updated: true };
   }
 
   // 插入新记录
-  await env.DB.prepare(
+  await env.ASC_DB.prepare(
     'INSERT INTO audio_tracks (id, song_id, track_type, part_name, file_key, file_size) VALUES (?, ?, ?, ?, ?, ?)'
   ).bind(id, songId, trackType, partName, fileKey, arrayBuffer.byteLength).run();
 
@@ -161,18 +161,18 @@ async function convertPdfToImages(env, file, songId) {
       // 上传到 R2
       const id = crypto.randomUUID();
       const fileKey = `songs/${songId}/sheets/${id}.png`;
-      await env.SONG_BUCKET.put(fileKey, imgArrayBuffer, {
+      await env.ASC_BUCKET.put(fileKey, imgArrayBuffer, {
         httpMetadata: { contentType: 'image/png' },
       });
 
       // 获取排序值
-      const maxOrder = await env.DB.prepare(
+      const maxOrder = await env.ASC_DB.prepare(
         'SELECT MAX(sort_order) as max_order FROM sheet_images WHERE song_id = ?'
       ).bind(songId).first();
       const sortOrder = (maxOrder?.max_order ?? -1) + 1;
 
       // 插入数据库
-      await env.DB.prepare(
+      await env.ASC_DB.prepare(
         'INSERT INTO sheet_images (id, song_id, file_key, sort_order, width, height) VALUES (?, ?, ?, ?, ?, ?)'
       ).bind(id, songId, fileKey, sortOrder, Math.round(viewport.width), Math.round(viewport.height)).run();
 
@@ -194,16 +194,16 @@ async function convertPdfToImages(env, file, songId) {
     console.error('PDF conversion failed:', e.message);
     const id = crypto.randomUUID();
     const fileKey = `songs/${songId}/sheets/${id}.pdf`;
-    await env.SONG_BUCKET.put(fileKey, arrayBuffer, {
+    await env.ASC_BUCKET.put(fileKey, arrayBuffer, {
       httpMetadata: { contentType: 'application/pdf' },
     });
 
-    const maxOrder = await env.DB.prepare(
+    const maxOrder = await env.ASC_DB.prepare(
       'SELECT MAX(sort_order) as max_order FROM sheet_images WHERE song_id = ?'
     ).bind(songId).first();
     const sortOrder = (maxOrder?.max_order ?? -1) + 1;
 
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       'INSERT INTO sheet_images (id, song_id, file_key, sort_order) VALUES (?, ?, ?, ?)'
     ).bind(id, songId, fileKey, sortOrder).run();
 

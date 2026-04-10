@@ -27,7 +27,7 @@ export async function onRequestPost(context) {
   const { id } = params;
 
   try {
-    const album = await env.DB.prepare('SELECT * FROM albums WHERE id = ?').bind(id).first();
+    const album = await env.ASC_DB.prepare('SELECT * FROM albums WHERE id = ?').bind(id).first();
     if (!album) {
       return json({ error: '专辑不存在' }, 404);
     }
@@ -40,7 +40,7 @@ export async function onRequestPost(context) {
     }
 
     // 获取当前最大排序值
-    const maxOrder = await env.DB.prepare(
+    const maxOrder = await env.ASC_DB.prepare(
       'SELECT MAX(sort_order) as max_order FROM album_songs WHERE album_id = ?'
     ).bind(id).first();
     let sortOrder = (maxOrder?.max_order ?? -1) + 1;
@@ -48,24 +48,24 @@ export async function onRequestPost(context) {
     const stmts = [];
     for (const songId of song_ids) {
       // 验证歌曲存在
-      const song = await env.DB.prepare('SELECT id FROM songs WHERE id = ?').bind(songId).first();
+      const song = await env.ASC_DB.prepare('SELECT id FROM songs WHERE id = ?').bind(songId).first();
       if (!song) continue;
 
       // 检查是否已存在
-      const existing = await env.DB.prepare(
+      const existing = await env.ASC_DB.prepare(
         'SELECT 1 FROM album_songs WHERE album_id = ? AND song_id = ?'
       ).bind(id, songId).first();
       if (existing) continue;
 
       stmts.push(
-        env.DB.prepare(
+        env.ASC_DB.prepare(
           'INSERT INTO album_songs (album_id, song_id, sort_order) VALUES (?, ?, ?)'
         ).bind(id, songId, sortOrder++)
       );
     }
 
     if (stmts.length > 0) {
-      await env.DB.batch(stmts);
+      await env.ASC_DB.batch(stmts);
     }
 
     return json({ message: `成功添加 ${stmts.length} 首歌曲`, added: stmts.length });
@@ -88,11 +88,11 @@ export async function onRequestPut(context) {
     }
 
     const stmts = order.map((songId, index) =>
-      env.DB.prepare('UPDATE album_songs SET sort_order = ? WHERE album_id = ? AND song_id = ?')
+      env.ASC_DB.prepare('UPDATE album_songs SET sort_order = ? WHERE album_id = ? AND song_id = ?')
         .bind(index, id, songId)
     );
 
-    await env.DB.batch(stmts);
+    await env.ASC_DB.batch(stmts);
 
     return json({ message: '排序更新成功' });
   } catch (e) {
@@ -114,11 +114,11 @@ export async function onRequestDelete(context) {
     }
 
     const stmts = song_ids.map(songId =>
-      env.DB.prepare('DELETE FROM album_songs WHERE album_id = ? AND song_id = ?')
+      env.ASC_DB.prepare('DELETE FROM album_songs WHERE album_id = ? AND song_id = ?')
         .bind(id, songId)
     );
 
-    await env.DB.batch(stmts);
+    await env.ASC_DB.batch(stmts);
 
     return json({ message: `已移除 ${song_ids.length} 首歌曲` });
   } catch (e) {

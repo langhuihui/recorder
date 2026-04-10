@@ -24,7 +24,7 @@ export async function onRequestDelete(context) {
   const { id, sheetId } = params;
 
   try {
-    const sheet = await env.DB.prepare(
+    const sheet = await env.ASC_DB.prepare(
       'SELECT * FROM sheet_images WHERE id = ? AND song_id = ?'
     ).bind(sheetId, id).first();
 
@@ -33,10 +33,10 @@ export async function onRequestDelete(context) {
     }
 
     // 从 R2 删除
-    await env.SONG_BUCKET.delete(sheet.file_key);
+    await env.ASC_BUCKET.delete(sheet.file_key);
 
     // 从数据库删除
-    await env.DB.prepare('DELETE FROM sheet_images WHERE id = ?').bind(sheetId).run();
+    await env.ASC_DB.prepare('DELETE FROM sheet_images WHERE id = ?').bind(sheetId).run();
 
     return json({ message: '删除成功' });
   } catch (e) {

@@ -29,16 +29,16 @@ export async function onRequestGet(context) {
   const baseUrl = url.origin;
 
   try {
-    const song = await env.DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
+    const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
 
-    const sheets = await env.DB.prepare(
+    const sheets = await env.ASC_DB.prepare(
       'SELECT * FROM sheet_images WHERE song_id = ? ORDER BY sort_order'
     ).bind(id).all();
 
-    const tracks = await env.DB.prepare(
+    const tracks = await env.ASC_DB.prepare(
       'SELECT * FROM audio_tracks WHERE song_id = ?'
     ).bind(id).all();
 
@@ -66,7 +66,7 @@ export async function onRequestPut(context) {
   const { id } = params;
 
   try {
-    const song = await env.DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
+    const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
@@ -74,7 +74,7 @@ export async function onRequestPut(context) {
     const body = await request.json();
     const { title, artist, description } = body;
 
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       `UPDATE songs SET 
         title = COALESCE(?, title),
         artist = COALESCE(?, artist),
@@ -83,7 +83,7 @@ export async function onRequestPut(context) {
       WHERE id = ?`
     ).bind(title || null, artist || null, description || null, id).run();
 
-    const updated = await env.DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
+    const updated = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
     return json({ data: updated });
   } catch (e) {
     return json({ error: e.message }, 500);
@@ -96,24 +96,24 @@ export async function onRequestDelete(context) {
   const { id } = params;
 
   try {
-    const song = await env.DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
+    const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
 
     // 获取所有关联文件
-    const sheets = await env.DB.prepare('SELECT file_key FROM sheet_images WHERE song_id = ?').bind(id).all();
-    const tracks = await env.DB.prepare('SELECT file_key FROM audio_tracks WHERE song_id = ?').bind(id).all();
+    const sheets = await env.ASC_DB.prepare('SELECT file_key FROM sheet_images WHERE song_id = ?').bind(id).all();
+    const tracks = await env.ASC_DB.prepare('SELECT file_key FROM audio_tracks WHERE song_id = ?').bind(id).all();
 
     // 从 R2 删除文件
     const fileKeys = [
       ...sheets.results.map(s => s.file_key),
       ...tracks.results.map(t => t.file_key),
     ];
-    await Promise.all(fileKeys.map(key => env.SONG_BUCKET.delete(key)));
+    await Promise.all(fileKeys.map(key => env.ASC_BUCKET.delete(key)));
 
     // 从 D1 删除记录（CASCADE 会自动删除关联记录）
-    await env.DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
+    await env.ASC_DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
 
     return json({ message: '删除成功' });
   } catch (e) {

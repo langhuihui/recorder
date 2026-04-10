@@ -41,11 +41,11 @@ export async function onRequestGet(context) {
 
     listQuery += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
 
-    const countResult = await env.DB.prepare(countQuery)
+    const countResult = await env.ASC_DB.prepare(countQuery)
       .bind(...bindings)
       .first();
 
-    const files = await env.DB.prepare(listQuery)
+    const files = await env.ASC_DB.prepare(listQuery)
       .bind(...bindings, limit, offset)
       .all();
 
@@ -94,15 +94,15 @@ export async function onRequestPost(context) {
     const fileKey = `practice/${id}.${ext}`;
 
     const arrayBuffer = await file.arrayBuffer();
-    await env.SONG_BUCKET.put(fileKey, arrayBuffer, {
+    await env.ASC_BUCKET.put(fileKey, arrayBuffer, {
       httpMetadata: { contentType: file.type || 'application/octet-stream' },
     });
 
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       'INSERT INTO practice_files (id, name, description, category, file_key, size) VALUES (?, ?, ?, ?, ?, ?)'
     ).bind(id, file.name, description, category, fileKey, file.size).run();
 
-    const record = await env.DB.prepare('SELECT * FROM practice_files WHERE id = ?').bind(id).first();
+    const record = await env.ASC_DB.prepare('SELECT * FROM practice_files WHERE id = ?').bind(id).first();
     return json({
       data: { ...record, url: `${baseUrl}/api/files/${fileKey}` },
     }, 201);

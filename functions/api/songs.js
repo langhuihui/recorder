@@ -33,18 +33,18 @@ export async function onRequestGet(context) {
   const offset = (page - 1) * limit;
 
   try {
-    const countResult = await env.DB.prepare('SELECT COUNT(*) as total FROM songs').first();
-    const songs = await env.DB.prepare(
+    const countResult = await env.ASC_DB.prepare('SELECT COUNT(*) as total FROM songs').first();
+    const songs = await env.ASC_DB.prepare(
       'SELECT * FROM songs ORDER BY created_at DESC LIMIT ? OFFSET ?'
     ).bind(limit, offset).all();
 
     // 为每首歌附加歌谱和音频信息
     const songList = await Promise.all(songs.results.map(async (song) => {
-      const sheets = await env.DB.prepare(
+      const sheets = await env.ASC_DB.prepare(
         'SELECT * FROM sheet_images WHERE song_id = ? ORDER BY sort_order'
       ).bind(song.id).all();
 
-      const tracks = await env.DB.prepare(
+      const tracks = await env.ASC_DB.prepare(
         'SELECT * FROM audio_tracks WHERE song_id = ?'
       ).bind(song.id).all();
 
@@ -90,11 +90,11 @@ export async function onRequestPost(context) {
     }
 
     const id = generateId();
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       'INSERT INTO songs (id, title, artist, description) VALUES (?, ?, ?, ?)'
     ).bind(id, title, artist || '', description || '').run();
 
-    const song = await env.DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
+    const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first();
     return json({ data: song }, 201);
   } catch (e) {
     return json({ error: e.message }, 500);

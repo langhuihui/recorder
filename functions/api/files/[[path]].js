@@ -28,7 +28,7 @@ export async function onRequestGet(context) {
     // 支持 Range 请求（音频播放需要）
     const range = request.headers.get('Range');
 
-    const object = await env.SONG_BUCKET.get(filePath, {
+    const object = await env.ASC_BUCKET.get(filePath, {
       range: range ? parseRange(range) : undefined,
     });
 

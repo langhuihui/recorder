@@ -33,11 +33,11 @@ export async function onRequestPut(context) {
 
     // 批量更新排序
     const stmts = order.map((sheetId, index) =>
-      env.DB.prepare('UPDATE sheet_images SET sort_order = ? WHERE id = ? AND song_id = ?')
+      env.ASC_DB.prepare('UPDATE sheet_images SET sort_order = ? WHERE id = ? AND song_id = ?')
         .bind(index, sheetId, id)
     );
 
-    await env.DB.batch(stmts);
+    await env.ASC_DB.batch(stmts);
 
     return json({ message: '排序更新成功' });
   } catch (e) {

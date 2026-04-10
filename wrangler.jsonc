@@ -5,27 +5,16 @@
 // R2 绑定 - 存储歌曲文件
 "r2_buckets": [
 {
-"binding": "SONG_BUCKET",
-"bucket_name": "song-files"
-},
-{
-"bucket_name": "asc",
 "binding": "ASC_BUCKET",
-"remote": true
+"bucket_name": "asc"
 }
 ],
 // D1 绑定 - 存储歌曲元数据
 "d1_databases": [
 {
-"binding": "DB",
-"database_name": "song-db",
-"database_id": "YOUR_D1_DATABASE_ID"
-},
-{
 "binding": "ASC_DB",
 "database_name": "asc",
-"database_id": "ef113082-b115-4e5b-975b-9fae829cc0fa",
-"remote": true
+"database_id": "ef113082-b115-4e5b-975b-9fae829cc0fa"
 }
 ]
 }

@@ -26,7 +26,7 @@ export async function onRequestGet(context) {
   const baseUrl = url.origin;
 
   try {
-    const file = await env.DB.prepare('SELECT * FROM practice_files WHERE id = ?').bind(id).first();
+    const file = await env.ASC_DB.prepare('SELECT * FROM practice_files WHERE id = ?').bind(id).first();
     if (!file) return json({ error: '文件不存在' }, 404);
     return json({ data: { ...file, url: `${baseUrl}/api/files/${file.file_key}` } });
   } catch (e) {
@@ -39,11 +39,11 @@ export async function onRequestDelete(context) {
   const { id } = params;
 
   try {
-    const file = await env.DB.prepare('SELECT * FROM practice_files WHERE id = ?').bind(id).first();
+    const file = await env.ASC_DB.prepare('SELECT * FROM practice_files WHERE id = ?').bind(id).first();
     if (!file) return json({ error: '文件不存在' }, 404);
 
-    await env.SONG_BUCKET.delete(file.file_key);
-    await env.DB.prepare('DELETE FROM practice_files WHERE id = ?').bind(id).run();
+    await env.ASC_BUCKET.delete(file.file_key);
+    await env.ASC_DB.prepare('DELETE FROM practice_files WHERE id = ?').bind(id).run();
 
     return json({ message: '删除成功' });
   } catch (e) {

@@ -24,7 +24,7 @@ export async function onRequestPost(context) {
   const { id } = params;
 
   try {
-    const album = await env.DB.prepare('SELECT * FROM albums WHERE id = ?').bind(id).first();
+    const album = await env.ASC_DB.prepare('SELECT * FROM albums WHERE id = ?').bind(id).first();
     if (!album) {
       return json({ error: '专辑不存在' }, 404);
     }
@@ -42,19 +42,19 @@ export async function onRequestPost(context) {
 
     // 删除旧封面
     if (album.cover_file_key) {
-      await env.SONG_BUCKET.delete(album.cover_file_key);
+      await env.ASC_BUCKET.delete(album.cover_file_key);
     }
 
     const ext = file.name.split('.').pop().toLowerCase();
     const fileKey = `albums/${id}/cover.${ext}`;
 
     const arrayBuffer = await file.arrayBuffer();
-    await env.SONG_BUCKET.put(fileKey, arrayBuffer, {
+    await env.ASC_BUCKET.put(fileKey, arrayBuffer, {
       httpMetadata: { contentType: file.type },
     });
 
     // 更新数据库
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       'UPDATE albums SET cover_file_key = ?, updated_at = datetime(\'now\') WHERE id = ?'
     ).bind(fileKey, id).run();
 

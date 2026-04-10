@@ -33,8 +33,8 @@ export async function onRequestGet(context) {
   const offset = (page - 1) * limit;
 
   try {
-    const countResult = await env.DB.prepare('SELECT COUNT(*) as total FROM albums').first();
-    const albums = await env.DB.prepare(
+    const countResult = await env.ASC_DB.prepare('SELECT COUNT(*) as total FROM albums').first();
+    const albums = await env.ASC_DB.prepare(
       'SELECT * FROM albums ORDER BY created_at DESC LIMIT ? OFFSET ?'
     ).bind(limit, offset).all();
 
@@ -42,12 +42,12 @@ export async function onRequestGet(context) {
 
     // 为每个专辑附加歌曲数量和封面信息
     const albumList = await Promise.all(albums.results.map(async (album) => {
-      const songCount = await env.DB.prepare(
+      const songCount = await env.ASC_DB.prepare(
         'SELECT COUNT(*) as count FROM album_songs WHERE album_id = ?'
       ).bind(album.id).first();
 
       // 获取专辑内前 4 首歌的封面（用于网格预览）
-      const previewSongs = await env.DB.prepare(
+      const previewSongs = await env.ASC_DB.prepare(
         `SELECT s.id, s.title, s.artist, si.file_key
          FROM album_songs as2
          JOIN songs s ON s.id = as2.song_id
@@ -96,11 +96,11 @@ export async function onRequestPost(context) {
     }
 
     const id = generateId();
-    await env.DB.prepare(
+    await env.ASC_DB.prepare(
       'INSERT INTO albums (id, title, description) VALUES (?, ?, ?)'
     ).bind(id, title, description || '').run();
 
-    const album = await env.DB.prepare('SELECT * FROM albums WHERE id = ?').bind(id).first();
+    const album = await env.ASC_DB.prepare('SELECT * FROM albums WHERE id = ?').bind(id).first();
     return json({ data: album }, 201);
   } catch (e) {
     return json({ error: e.message }, 500);
