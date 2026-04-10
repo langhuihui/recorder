@@ -1,0 +1,398 @@
+---
+import AdminLayout from '../../layouts/AdminLayout.astro';
+---
+
+<AdminLayout title="专辑管理">
+  <!-- 专辑列表视图 -->
+  <div id="view-albums" class="view">
+    <div class="flex items-center justify-between gap-2 flex-wrap" style="margin-bottom:20px">
+      <div style="font-size:0.85rem;color:var(--text-muted)">创建和管理专辑，将歌曲组织成专辑供信徒收听</div>
+      <button class="btn btn-primary" onclick="switchView('create-album')">+ 创建专辑</button>
+    </div>
+    <div id="album-list" class="album-grid">
+      <div class="loading">加载中...</div>
+    </div>
+    <div id="album-pagination" class="pagination"></div>
+  </div>
+
+  <!-- 创建/编辑专辑视图 -->
+  <div id="view-create-album" class="view" style="display:none">
+    <div class="flex items-center justify-between gap-2 flex-wrap" style="margin-bottom:20px">
+      <h2 id="album-form-title" style="font-size:1.1rem;font-weight:700">创建专辑</h2>
+      <button class="btn btn-ghost" onclick="switchView('albums')">← 返回专辑列表</button>
+    </div>
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label" for="album-title">专辑标题 <span class="required">*</span></label>
+        <input type="text" id="album-title" class="form-input" placeholder="请输入专辑标题">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="album-desc">描述</label>
+        <textarea id="album-desc" class="form-input form-textarea" placeholder="请输入专辑描述（可选）"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">封面图片</label>
+        <div class="album-cover-upload" id="album-cover-zone">
+          <div id="album-cover-preview" class="album-cover-preview">
+            <div class="upload-icon">🖼️</div>
+            <p>点击选择封面图片</p>
+          </div>
+          <input type="file" id="album-cover-input" accept="image/*" hidden>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">添加歌曲</label>
+        <div class="album-song-picker">
+          <input type="text" id="album-song-search" class="form-input" placeholder="搜索歌曲标题...">
+          <div id="album-song-candidates" class="album-song-candidates" style="display:none"></div>
+          <div id="album-selected-songs" class="album-selected-songs"></div>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-ghost" onclick="switchView('albums')">取消</button>
+        <button class="btn btn-primary" id="album-submit-btn" onclick="submitAlbum()">创建专辑</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 专辑详情视图 -->
+  <div id="view-album-detail" class="view" style="display:none">
+    <div class="flex items-center justify-between gap-2 flex-wrap" style="margin-bottom:20px">
+      <h2 id="album-detail-title" style="font-size:1.1rem;font-weight:700">专辑详情</h2>
+      <button class="btn btn-ghost" onclick="switchView('albums')">← 返回列表</button>
+    </div>
+    <div id="album-detail-content"></div>
+  </div>
+</AdminLayout>
+
+<script>
+  const API = '/api';
+  let albumPage = 1;
+  let editingAlbumId: string | null = null;
+  let selectedAlbumSongs: any[] = [];
+  let albumCoverFile: File | null = null;
+  let allSongsCache: any[] = [];
+
+  function toast(msg: string, type = 'info') {
+    const c = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.textContent = msg;
+    c?.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
+  function showOverlay(text: string) {
+    document.getElementById('upload-progress-text')!.textContent = text;
+    (document.getElementById('upload-progress-bar') as HTMLElement).style.width = '0%';
+    document.getElementById('upload-overlay')!.classList.remove('hidden');
+  }
+  function hideOverlay() { document.getElementById('upload-overlay')!.classList.add('hidden'); }
+  function setProgress(p: number) { (document.getElementById('upload-progress-bar') as HTMLElement).style.width = p + '%'; }
+  function formatDate(s: string) { return s ? new Date(s).toLocaleDateString('zh-CN') : ''; }
+  function escapeHtml(s: string) {
+    if (!s) return '';
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function switchView(name: string) {
+    ['albums','create-album','album-detail'].forEach(v => {
+      const el = document.getElementById(`view-${v}`);
+      if (el) el.style.display = v === name ? 'block' : 'none';
+    });
+    if (name === 'albums') loadAlbums(albumPage);
+    if (name === 'create-album' && !editingAlbumId) resetAlbumForm();
+  }
+
+  // --- Load albums ---
+  async function loadAlbums(page = 1) {
+    albumPage = page;
+    const listEl = document.getElementById('album-list')!;
+    listEl.innerHTML = '<div class="loading">加载中...</div>';
+    try {
+      const res = await fetch(`${API}/albums?page=${page}&limit=12`);
+      const { data, pagination } = await res.json();
+      if (!data || data.length === 0) {
+        listEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">💿</div><p>还没有专辑，点击创建按钮添加</p><button class="btn btn-primary" onclick="switchView('create-album')">+ 创建专辑</button></div>`;
+        document.getElementById('album-pagination')!.innerHTML = '';
+        return;
+      }
+      listEl.innerHTML = data.map((album: any) => `
+        <div class="album-card" onclick="viewAlbum('${album.id}')">
+          <div class="album-cover">
+            ${album.cover_url ? `<img src="${album.cover_url}" alt="${escapeHtml(album.title)}" loading="lazy">` : '<div class="album-cover-placeholder">💿</div>'}
+            <div class="album-cover-overlay"><div class="play-icon">▶</div></div>
+          </div>
+          <div class="album-info">
+            <div class="album-title">${escapeHtml(album.title)}</div>
+            <div class="album-meta">${album.song_count || 0} 首 · ${formatDate(album.created_at)}</div>
+          </div>
+        </div>
+      `).join('');
+      renderPagination(pagination);
+    } catch(e: any) { listEl.innerHTML = `<div class="loading">加载失败</div>`; }
+  }
+
+  function renderPagination({ page, totalPages }: any) {
+    const el = document.getElementById('album-pagination')!;
+    if (totalPages <= 1) { el.innerHTML = ''; return; }
+    let html = '';
+    for (let i = 1; i <= totalPages; i++) {
+      html += `<button class="page-btn${i===page?' active':''}" onclick="loadAlbums(${i})">${i}</button>`;
+    }
+    el.innerHTML = html;
+  }
+
+  // --- View album ---
+  async function viewAlbum(albumId: string) {
+    switchView('album-detail');
+    const contentEl = document.getElementById('album-detail-content')!;
+    contentEl.innerHTML = '<div class="loading">加载中...</div>';
+    try {
+      const res = await fetch(`${API}/albums/${albumId}`);
+      const { data: album } = await res.json();
+      document.getElementById('album-detail-title')!.textContent = album.title;
+      let html = `<div class="card">
+        <div class="album-detail-inner" style="margin-bottom:20px">
+          <div class="album-detail-cover" style="background:var(--primary-dark);color:rgba(255,255,255,0.3)">
+            ${album.cover_url ? `<img src="${album.cover_url}" alt="封面" style="width:100%;height:100%;object-fit:cover">` : '💿'}
+          </div>
+          <div class="album-detail-info">
+            <h2 style="font-size:1.3rem;font-weight:800;color:var(--text);margin-bottom:8px">${escapeHtml(album.title)}</h2>
+            ${album.description ? `<p style="color:var(--text-muted);margin-bottom:12px">${escapeHtml(album.description)}</p>` : ''}
+            <p style="font-size:0.85rem;color:var(--text-muted)">${(album.songs||[]).length} 首歌曲 · 创建于 ${formatDate(album.created_at)}</p>
+            <div class="form-actions" style="margin-top:16px">
+              <button class="btn btn-outline btn-sm" onclick="editAlbum('${album.id}')">✏️ 编辑</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteAlbum('${album.id}','${escapeHtml(album.title)}')">🗑️ 删除</button>
+              <a href="/albums/${album.id}" target="_blank" class="btn btn-ghost btn-sm">🔗 前台预览</a>
+            </div>
+          </div>
+        </div>`;
+      if (album.songs?.length) {
+        html += `<div><h3 style="font-size:0.95rem;font-weight:700;margin-bottom:12px">🎵 歌曲列表</h3><div class="song-list">`;
+        album.songs.forEach((song: any, i: number) => {
+          html += `<div class="song-item" style="cursor:default">
+            <div class="song-num">${i+1}</div>
+            <div class="song-info"><div class="song-name">${escapeHtml(song.title)}</div>${song.artist?`<div class="song-artist">${escapeHtml(song.artist)}</div>`:''}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">${(song.tracks||[]).length} 音频</div>
+          </div>`;
+        });
+        html += '</div></div>';
+      } else {
+        html += `<p style="text-align:center;color:var(--text-muted);padding:24px">专辑中还没有歌曲，点击编辑按钮添加</p>`;
+      }
+      html += '</div>';
+      contentEl.innerHTML = html;
+    } catch(e: any) { contentEl.innerHTML = `<div class="loading">加载失败</div>`; }
+  }
+
+  // --- Edit album ---
+  async function editAlbum(albumId: string) {
+    try {
+      showOverlay('加载专辑信息...');
+      const res = await fetch(`${API}/albums/${albumId}`);
+      const { data: album } = await res.json();
+      hideOverlay();
+      editingAlbumId = albumId;
+      document.getElementById('album-form-title')!.textContent = '编辑专辑';
+      (document.getElementById('album-submit-btn') as HTMLButtonElement).textContent = '保存修改';
+      (document.getElementById('album-title') as HTMLInputElement).value = album.title;
+      (document.getElementById('album-desc') as HTMLTextAreaElement).value = album.description || '';
+      selectedAlbumSongs = (album.songs || []).map((s: any) => ({ id: s.id, title: s.title, artist: s.artist }));
+      renderSelectedSongs();
+      albumCoverFile = null;
+      renderCoverPreview(album.cover_url);
+      switchView('create-album');
+    } catch(e: any) { hideOverlay(); toast(`加载失败: ${e.message}`, 'error'); }
+  }
+
+  // --- Submit album ---
+  async function submitAlbum() {
+    const title = (document.getElementById('album-title') as HTMLInputElement).value.trim();
+    const description = (document.getElementById('album-desc') as HTMLTextAreaElement).value.trim();
+    if (!title) { toast('请输入专辑标题', 'error'); return; }
+    try {
+      showOverlay(editingAlbumId ? '正在保存...' : '正在创建专辑...');
+      let albumId = editingAlbumId;
+      if (editingAlbumId) {
+        const res = await fetch(`${API}/albums/${editingAlbumId}`, {
+          method: 'PUT', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ title, description }),
+        });
+        const r = await res.json();
+        if (!res.ok) throw new Error(r.error);
+        // Update songs
+        const detailRes = await fetch(`${API}/albums/${albumId}`);
+        const { data: detail } = await detailRes.json();
+        const currentIds = (detail.songs || []).map((s: any) => s.id);
+        const newIds = selectedAlbumSongs.map(s => s.id);
+        const toRemove = currentIds.filter((id: string) => !newIds.includes(id));
+        if (toRemove.length) {
+          await fetch(`${API}/albums/${albumId}/songs`, {
+            method: 'DELETE', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ song_ids: toRemove }),
+          });
+        }
+        const toAdd = newIds.filter((id: string) => !currentIds.includes(id));
+        if (toAdd.length) {
+          await fetch(`${API}/albums/${albumId}/songs`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ song_ids: toAdd }),
+          });
+        }
+        if (newIds.length) {
+          await fetch(`${API}/albums/${albumId}/songs`, {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ order: newIds }),
+          });
+        }
+      } else {
+        const res = await fetch(`${API}/albums`, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ title, description }),
+        });
+        const r = await res.json();
+        if (!res.ok) throw new Error(r.error);
+        albumId = r.data.id;
+        if (selectedAlbumSongs.length) {
+          await fetch(`${API}/albums/${albumId}/songs`, {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ song_ids: selectedAlbumSongs.map(s => s.id) }),
+          });
+        }
+      }
+      if (albumCoverFile) {
+        const form = new FormData();
+        form.append('file', albumCoverFile);
+        await fetch(`${API}/albums/${albumId}/cover`, { method: 'POST', body: form });
+      }
+      setProgress(100);
+      hideOverlay();
+      toast(editingAlbumId ? '专辑已更新' : '专辑创建成功', 'success');
+      editingAlbumId = null;
+      switchView('albums');
+    } catch(e: any) { hideOverlay(); toast(`操作失败: ${e.message}`, 'error'); }
+  }
+
+  async function deleteAlbum(id: string, title: string) {
+    if (!confirm(`确定要删除专辑「${title}」吗？`)) return;
+    try {
+      const res = await fetch(`${API}/albums/${id}`, { method: 'DELETE' });
+      const r = await res.json();
+      if (!res.ok) throw new Error(r.error);
+      toast('删除成功', 'success');
+      switchView('albums');
+    } catch(e: any) { toast(`删除失败: ${e.message}`, 'error'); }
+  }
+
+  // --- Album form helpers ---
+  function resetAlbumForm() {
+    editingAlbumId = null;
+    selectedAlbumSongs = [];
+    albumCoverFile = null;
+    document.getElementById('album-form-title')!.textContent = '创建专辑';
+    (document.getElementById('album-submit-btn') as HTMLButtonElement).textContent = '创建专辑';
+    (document.getElementById('album-title') as HTMLInputElement).value = '';
+    (document.getElementById('album-desc') as HTMLTextAreaElement).value = '';
+    (document.getElementById('album-song-search') as HTMLInputElement).value = '';
+    const cands = document.getElementById('album-song-candidates')!;
+    cands.innerHTML = '';
+    cands.style.display = 'none';
+    renderSelectedSongs();
+    renderCoverPreview();
+  }
+
+  function renderCoverPreview(url?: string) {
+    const el = document.getElementById('album-cover-preview')!;
+    if (albumCoverFile) {
+      el.innerHTML = `<img src="${URL.createObjectURL(albumCoverFile)}" alt="封面" style="width:100%;height:100%;object-fit:cover">`;
+    } else if (url) {
+      el.innerHTML = `<img src="${url}" alt="封面" style="width:100%;height:100%;object-fit:cover">`;
+    } else {
+      el.innerHTML = `<div class="upload-icon">🖼️</div><p>点击选择封面图片</p>`;
+    }
+  }
+
+  function initAlbumCoverUpload() {
+    const zone = document.getElementById('album-cover-zone')!;
+    const input = document.getElementById('album-cover-input') as HTMLInputElement;
+    zone.addEventListener('click', () => input.click());
+    input.addEventListener('change', () => {
+      const f = input.files?.[0];
+      if (f && f.type.startsWith('image/')) { albumCoverFile = f; renderCoverPreview(); }
+      input.value = '';
+    });
+  }
+
+  async function searchSongsForAlbum(query: string) {
+    const candidatesEl = document.getElementById('album-song-candidates')!;
+    if (allSongsCache.length === 0) {
+      const res = await fetch(`${API}/songs?page=1&limit=100`);
+      const { data } = await res.json();
+      allSongsCache = data || [];
+    }
+    const q = query.toLowerCase();
+    const filtered = q ? allSongsCache.filter((s: any) => s.title.toLowerCase().includes(q) || (s.artist || '').toLowerCase().includes(q)) : allSongsCache;
+    if (filtered.length === 0) {
+      candidatesEl.innerHTML = '<div class="candidate-item" style="justify-content:center;color:var(--text-muted)">没有找到歌曲</div>';
+      candidatesEl.style.display = 'block';
+      return;
+    }
+    const selectedIds = selectedAlbumSongs.map(s => s.id);
+    candidatesEl.innerHTML = filtered.slice(0,20).map((song: any) => {
+      const sel = selectedIds.includes(song.id);
+      return `<div class="candidate-item${sel?' ':''}" onclick="toggleAlbumSong('${song.id}','${escapeHtml(song.title)}','${escapeHtml(song.artist||'')}')">
+        <span>${escapeHtml(song.title)}${song.artist ? ` — <small>${escapeHtml(song.artist)}</small>` : ''}</span>
+        <span style="color:${sel?'#16a34a':'var(--primary)'};font-weight:700">${sel?'✓':'+'}</span>
+      </div>`;
+    }).join('');
+    candidatesEl.style.display = 'block';
+  }
+
+  function toggleAlbumSong(id: string, title: string, artist: string) {
+    const idx = selectedAlbumSongs.findIndex(s => s.id === id);
+    if (idx >= 0) selectedAlbumSongs.splice(idx, 1);
+    else selectedAlbumSongs.push({ id, title, artist });
+    renderSelectedSongs();
+    const q = (document.getElementById('album-song-search') as HTMLInputElement).value.trim();
+    searchSongsForAlbum(q);
+  }
+
+  function renderSelectedSongs() {
+    const c = document.getElementById('album-selected-songs')!;
+    c.innerHTML = selectedAlbumSongs.map(s => `
+      <div class="selected-song-chip">
+        ${escapeHtml(s.title)}
+        <button class="chip-remove" onclick="removeAlbumSong('${s.id}')">×</button>
+      </div>
+    `).join('');
+  }
+
+  function removeAlbumSong(id: string) {
+    selectedAlbumSongs = selectedAlbumSongs.filter(s => s.id !== id);
+    renderSelectedSongs();
+    const cands = document.getElementById('album-song-candidates')!;
+    if (cands.style.display !== 'none') {
+      const q = (document.getElementById('album-song-search') as HTMLInputElement).value.trim();
+      searchSongsForAlbum(q);
+    }
+  }
+
+  function initAlbumSongSearch() {
+    const input = document.getElementById('album-song-search') as HTMLInputElement;
+    let timer: ReturnType<typeof setTimeout>;
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => searchSongsForAlbum(input.value.trim()), 300); });
+    input.addEventListener('focus', () => searchSongsForAlbum(input.value.trim()));
+    document.addEventListener('click', e => {
+      const picker = document.querySelector('.album-song-picker');
+      if (picker && !picker.contains(e.target as Node)) {
+        document.getElementById('album-song-candidates')!.style.display = 'none';
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    initAlbumCoverUpload();
+    initAlbumSongSearch();
+    loadAlbums();
+  });
+</script>

@@ -1,15 +1,18 @@
 {
-  "name": "song-manager",
+  "name": "asa-choir",
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler pages dev",
-    "build": "node build.mjs",
-    "deploy": "wrangler pages deploy dist",
-    "db:migrate": "wrangler d1 execute song-db --local --file=./migrations/0001_init.sql && wrangler d1 execute song-db --local --file=./migrations/0002_albums.sql",
-    "db:migrate:remote": "wrangler d1 execute song-db --remote --file=./migrations/0001_init.sql && wrangler d1 execute song-db --remote --file=./migrations/0002_albums.sql"
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "deploy": "astro build && wrangler pages deploy dist",
+    "db:migrate": "wrangler d1 execute song-db --local --file=./migrations/0001_init.sql && wrangler d1 execute song-db --local --file=./migrations/0002_albums.sql && wrangler d1 execute song-db --local --file=./migrations/0003_practice_files.sql",
+    "db:migrate:remote": "wrangler d1 execute song-db --remote --file=./migrations/0001_init.sql && wrangler d1 execute song-db --remote --file=./migrations/0002_albums.sql && wrangler d1 execute song-db --remote --file=./migrations/0003_practice_files.sql"
   },
   "dependencies": {
+    "@astrojs/cloudflare": "^13.1.8",
+    "astro": "^6.1.5",
     "pdfjs-dist": "^4.9.124"
   },
   "pnpm": {
@@ -21,7 +24,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250327.0",
-    "wrangler": "^4.6.0",
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "wrangler": "^4.6.0"
   }
 }
