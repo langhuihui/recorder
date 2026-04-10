@@ -1,0 +1,96 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title?: string;
+}
+
+const { title = '后台管理' } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title} — 亚萨诗班管理后台</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+</head>
+<body class="admin-body">
+  <div class="admin-layout">
+    <!-- 侧边栏 -->
+    <aside class="admin-sidebar" id="adminSidebar">
+      <div class="sidebar-header">
+        <a href="/" class="sidebar-logo">🎵 亚萨诗班</a>
+        <button class="sidebar-close" id="sidebarClose" aria-label="关闭侧边栏">✕</button>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/admin" class="sidebar-link" data-page="dashboard">
+          <span>📊</span> 仪表盘
+        </a>
+        <a href="/admin/songs" class="sidebar-link" data-page="songs">
+          <span>🎵</span> 歌曲管理
+        </a>
+        <a href="/admin/albums" class="sidebar-link" data-page="albums">
+          <span>💿</span> 专辑管理
+        </a>
+        <a href="/admin/practice" class="sidebar-link" data-page="practice">
+          <span>📁</span> 练唱文件
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="/" class="sidebar-link">
+          <span>🏠</span> 返回网站
+        </a>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <div class="admin-main">
+      <header class="admin-header">
+        <button class="menu-toggle admin-menu-btn" id="adminMenuBtn" aria-label="打开侧边栏">
+          <span></span><span></span><span></span>
+        </button>
+        <h1 class="admin-page-title">{title}</h1>
+      </header>
+      <div class="admin-content">
+        <slot />
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast 容器 -->
+  <div id="toast-container"></div>
+
+  <!-- 上传进度覆盖层 -->
+  <div id="upload-overlay" class="overlay hidden">
+    <div class="overlay-content">
+      <div class="spinner"></div>
+      <p id="upload-progress-text">正在上传...</p>
+      <div class="progress-bar">
+        <div class="progress-fill" id="upload-progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 移动端侧边栏切换
+    const menuBtn = document.getElementById('adminMenuBtn');
+    const sidebar = document.getElementById('adminSidebar');
+    const closeBtn = document.getElementById('sidebarClose');
+
+    menuBtn?.addEventListener('click', () => sidebar?.classList.add('open'));
+    closeBtn?.addEventListener('click', () => sidebar?.classList.remove('open'));
+
+    // 标记当前活跃页面
+    const path = window.location.pathname;
+    document.querySelectorAll('.sidebar-link[data-page]').forEach(link => {
+      const page = link.getAttribute('data-page');
+      const href = (link as HTMLAnchorElement).getAttribute('href');
+      if (href && (path === href || (href !== '/admin' && path.startsWith(href)))) {
+        link.classList.add('active');
+      }
+    });
+  </script>
+</body>
+</html>

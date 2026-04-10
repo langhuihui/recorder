@@ -1,0 +1,364 @@
+---
+import Layout from '../../layouts/Layout.astro';
+---
+
+<Layout title="专辑" description="亚萨诗班专辑列表 — 聆听神的荣耀">
+  <!-- Page Hero -->
+  <div class="page-hero" id="pageHero">
+    <div class="container">
+      <h1>🎵 音乐专辑</h1>
+      <p>"你们当用诗篇、颂词、灵歌彼此对说，口唱心和地赞美主。" — 以弗所书 5:19</p>
+    </div>
+  </div>
+
+  <!-- Album List View -->
+  <div id="view-list" class="container">
+    <div id="albums-container" class="albums-grid">
+      <div class="loading">加载专辑中...</div>
+    </div>
+    <div id="albums-pagination" class="pagination"></div>
+  </div>
+
+  <!-- Album Detail View -->
+  <div id="view-detail" style="display:none">
+    <!-- Album Hero -->
+    <div class="album-detail-hero">
+      <div class="container">
+        <div class="album-detail-inner">
+          <div class="album-detail-cover" id="albumCover">
+            <span>🎵</span>
+          </div>
+          <div id="albumInfo" class="album-detail-info">
+            <h1 style="color:#fff;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;margin-bottom:8px">加载中...</h1>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player + Song List -->
+    <div class="container">
+      <div class="player-section">
+        <!-- Now Playing -->
+        <div class="player-now-playing" id="playerPanel" style="display:none">
+          <div class="player-now-title">正在播放</div>
+          <div class="player-song-name" id="nowPlayingName">—</div>
+          <div class="player-song-artist" id="nowPlayingArtist"></div>
+          <div class="track-type-tabs" id="trackTypeTabs"></div>
+          <div class="track-type-tabs" id="partTabs"></div>
+          <div class="player-controls">
+            <button class="player-btn" id="btnPrev" title="上一首">⏮</button>
+            <button class="player-btn play-pause" id="btnPlay">▶</button>
+            <button class="player-btn" id="btnNext" title="下一首">⏭</button>
+            <div class="player-progress">
+              <div class="player-track" id="progressTrack">
+                <div class="player-track-fill" id="progressFill"></div>
+              </div>
+              <div class="player-time">
+                <span id="timeElapsed">0:00</span>
+                <span id="timeDuration">0:00</span>
+              </div>
+            </div>
+            <div class="player-volume">
+              🔊
+              <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="1">
+            </div>
+          </div>
+        </div>
+        <!-- Song List -->
+        <div id="songListContainer">
+          <div class="loading">加载歌曲中...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</Layout>
+
+<script>
+  let songs: any[] = [];
+  let currentSongIndex = -1;
+  let currentTrackType = 'accompaniment';
+  let currentPart: string | null = null;
+  let audio = new Audio();
+  let isPlaying = false;
+  let currentAlbumId: string | null = null;
+
+  // Detect if we're viewing an album detail
+  function getAlbumIdFromUrl(): string | null {
+    const parts = window.location.pathname.replace(/\/$/, '').split('/');
+    const last = parts[parts.length - 1];
+    // If we're at /albums/some-uuid, last will be the id
+    if (last && last !== 'albums') return last;
+    // Also check hash
+    if (window.location.hash.startsWith('#album-')) return window.location.hash.slice(7);
+    return null;
+  }
+
+  function showView(name: 'list' | 'detail') {
+    document.getElementById('view-list')!.style.display = name === 'list' ? 'block' : 'none';
+    document.getElementById('view-detail')!.style.display = name === 'detail' ? 'block' : 'none';
+    const hero = document.getElementById('pageHero')!;
+    if (name === 'detail') {
+      hero.style.display = 'none';
+    } else {
+      hero.style.display = 'block';
+    }
+  }
+
+  // ===== ALBUM LIST =====
+  let currentPage = 1;
+  const LIMIT = 12;
+
+  async function loadAlbums(page = 1) {
+    const container = document.getElementById('albums-container')!;
+    const paginationEl = document.getElementById('albums-pagination')!;
+    container.innerHTML = '<div class="loading">加载中...</div>';
+    try {
+      const res = await fetch(`/api/albums?page=${page}&limit=${LIMIT}`);
+      if (!res.ok) throw new Error();
+      const { data, pagination } = await res.json();
+      if (!data || data.length === 0) {
+        container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>暂无专辑，敬请期待</p></div>';
+        paginationEl.innerHTML = '';
+        return;
+      }
+      container.innerHTML = data.map((album: any) => `
+        <div class="album-card" onclick="openAlbum('${album.id}')" style="cursor:pointer">
+          <div class="album-cover">
+            ${album.cover_url ? `<img src="${album.cover_url}" alt="${album.title}" loading="lazy">` : '<div class="album-cover-placeholder">🎵</div>'}
+            <div class="album-cover-overlay"><div class="play-icon">▶</div></div>
+          </div>
+          <div class="album-info">
+            <div class="album-title">${album.title}</div>
+            <div class="album-meta">${album.song_count || 0} 首歌曲${album.description ? ' · ' + album.description.substring(0,30) : ''}</div>
+          </div>
+        </div>
+      `).join('');
+      const total = pagination.totalPages;
+      if (total <= 1) { paginationEl.innerHTML = ''; return; }
+      let pages = '';
+      for (let i = 1; i <= total; i++) {
+        pages += `<button class="page-btn${i===page?' active':''}" onclick="loadAlbums(${i})">${i}</button>`;
+      }
+      paginationEl.innerHTML = pages;
+    } catch {
+      container.innerHTML = '<div class="loading">加载失败，请刷新重试</div>';
+    }
+  }
+
+  function openAlbum(id: string) {
+    window.history.pushState({}, '', `/albums/${id}`);
+    loadAlbumDetail(id);
+    showView('detail');
+  }
+
+  function goBackToList() {
+    window.history.pushState({}, '', '/albums/');
+    showView('list');
+    stopAudio();
+  }
+
+  function stopAudio() {
+    audio.pause();
+    audio.src = '';
+    isPlaying = false;
+    currentSongIndex = -1;
+  }
+
+  // ===== ALBUM DETAIL / PLAYER =====
+  async function loadAlbumDetail(albumId: string) {
+    currentAlbumId = albumId;
+    const songListContainer = document.getElementById('songListContainer')!;
+    const playerPanel = document.getElementById('playerPanel')!;
+    playerPanel.style.display = 'none';
+    songListContainer.innerHTML = '<div class="loading">加载中...</div>';
+
+    // Add back button to hero
+    const infoEl = document.getElementById('albumInfo')!;
+    infoEl.innerHTML = `
+      <h1 style="color:#fff;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;margin-bottom:8px">加载中...</h1>
+      <div style="margin-top:20px">
+        <button onclick="goBackToList()" class="btn btn-outline-light btn-sm">← 返回专辑</button>
+      </div>
+    `;
+
+    try {
+      const res = await fetch(`/api/albums/${albumId}`);
+      if (!res.ok) throw new Error();
+      const { data } = await res.json();
+
+      // Update cover
+      if (data.cover_url) {
+        document.getElementById('albumCover')!.innerHTML = `<img src="${data.cover_url}" alt="${data.title}" style="width:100%;height:100%;object-fit:cover">`;
+      }
+
+      // Update info
+      const date = new Date(data.created_at).toLocaleDateString('zh-CN');
+      infoEl.innerHTML = `
+        <h1 style="color:#fff;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;margin-bottom:8px">${data.title}</h1>
+        ${data.description ? `<p class="album-detail-desc">${data.description}</p>` : ''}
+        <p class="album-detail-meta">${(data.songs||[]).length} 首歌曲 · 创建于 ${date}</p>
+        <div style="margin-top:20px">
+          <button onclick="goBackToList()" class="btn btn-outline-light btn-sm">← 返回专辑</button>
+        </div>
+      `;
+
+      songs = data.songs || [];
+      renderSongList();
+    } catch {
+      songListContainer.innerHTML = '<div class="loading">加载失败，请刷新重试</div>';
+    }
+  }
+
+  function renderSongList() {
+    const songListContainer = document.getElementById('songListContainer')!;
+    if (songs.length === 0) {
+      songListContainer.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>该专辑暂无歌曲</p></div>';
+      return;
+    }
+    songListContainer.innerHTML = `
+      <div class="song-list">
+        ${songs.map((song, i) => `
+          <div class="song-item${i === currentSongIndex ? ' active' : ''}" onclick="playSong(${i})" style="cursor:pointer">
+            <div class="song-num">${i === currentSongIndex && isPlaying ? '▶' : (i + 1)}</div>
+            <div class="song-info">
+              <div class="song-name">${song.title}</div>
+              ${song.artist ? `<div class="song-artist">${song.artist}</div>` : ''}
+            </div>
+            <div class="song-actions">
+              ${hasTracks(song) ? `<button class="song-action-btn" title="播放">▶</button>` : '<span style="font-size:0.75rem;color:var(--text-light)">无音频</span>'}
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+  }
+
+  function hasTracks(song: any): boolean {
+    return song.tracks && song.tracks.length > 0;
+  }
+
+  function playSong(index: number) {
+    if (index < 0 || index >= songs.length) return;
+    currentSongIndex = index;
+    const song = songs[index];
+    const playerPanel = document.getElementById('playerPanel')!;
+    playerPanel.style.display = 'block';
+    document.getElementById('nowPlayingName')!.textContent = song.title;
+    document.getElementById('nowPlayingArtist')!.textContent = song.artist || '';
+    const types = [...new Set((song.tracks || []).map((t: any) => t.track_type))] as string[];
+    if (!types.includes(currentTrackType)) currentTrackType = types[0] || 'accompaniment';
+    renderTrackTypeTabs(song, types);
+    renderPartTabs(song);
+    selectTrack(song);
+    renderSongList();
+  }
+
+  function renderTrackTypeTabs(song: any, types: string[]) {
+    const labels: Record<string,string> = { accompaniment: '🎹 伴奏', vocal: '🎤 范唱' };
+    const el = document.getElementById('trackTypeTabs')!;
+    el.innerHTML = types.map(t =>
+      `<button class="track-tab${t === currentTrackType ? ' active' : ''}" onclick="switchTrackType('${t}')">${labels[t] || t}</button>`
+    ).join('');
+  }
+
+  function switchTrackType(type: string) {
+    currentTrackType = type;
+    currentPart = null;
+    if (currentSongIndex >= 0) {
+      const song = songs[currentSongIndex];
+      const types = [...new Set((song.tracks || []).map((t: any) => t.track_type))] as string[];
+      renderTrackTypeTabs(song, types);
+      renderPartTabs(song);
+      selectTrack(song);
+    }
+  }
+
+  function renderPartTabs(song: any) {
+    const tracks = (song.tracks || []).filter((t: any) => t.track_type === currentTrackType);
+    const parts = tracks.map((t: any) => t.part_name);
+    if (!currentPart || !parts.includes(currentPart)) currentPart = parts[0] || null;
+    const labels: Record<string,string> = { soprano: '高音', alto: '中音', tenor: '次中音', bass: '低音', default: '默认' };
+    const el = document.getElementById('partTabs')!;
+    if (parts.length <= 1) { el.innerHTML = ''; return; }
+    el.innerHTML = parts.map((p: string) =>
+      `<button class="track-tab${p === currentPart ? ' active' : ''}" onclick="switchPart('${p}')">${labels[p] || p}</button>`
+    ).join('');
+  }
+
+  function switchPart(part: string) {
+    currentPart = part;
+    if (currentSongIndex >= 0) {
+      const song = songs[currentSongIndex];
+      renderPartTabs(song);
+      selectTrack(song);
+    }
+  }
+
+  function selectTrack(song: any) {
+    const tracks = (song.tracks || []).filter((t: any) => t.track_type === currentTrackType);
+    const track = currentPart ? tracks.find((t: any) => t.part_name === currentPart) || tracks[0] : tracks[0];
+    if (!track) return;
+    audio.src = track.url;
+    audio.play().then(() => { isPlaying = true; document.getElementById('btnPlay')!.textContent = '⏸'; }).catch(() => {});
+    isPlaying = true;
+    document.getElementById('btnPlay')!.textContent = '⏸';
+  }
+
+  // Audio events
+  audio.addEventListener('timeupdate', () => {
+    if (!audio.duration) return;
+    const pct = (audio.currentTime / audio.duration) * 100;
+    (document.getElementById('progressFill') as HTMLElement).style.width = pct + '%';
+    document.getElementById('timeElapsed')!.textContent = formatTime(audio.currentTime);
+    document.getElementById('timeDuration')!.textContent = formatTime(audio.duration);
+  });
+  audio.addEventListener('ended', () => {
+    if (currentSongIndex < songs.length - 1) playSong(currentSongIndex + 1);
+    else { isPlaying = false; document.getElementById('btnPlay')!.textContent = '▶'; }
+  });
+  audio.addEventListener('play', () => { isPlaying = true; document.getElementById('btnPlay')!.textContent = '⏸'; renderSongList(); });
+  audio.addEventListener('pause', () => { isPlaying = false; document.getElementById('btnPlay')!.textContent = '▶'; renderSongList(); });
+
+  document.getElementById('btnPlay')?.addEventListener('click', () => {
+    if (currentSongIndex === -1 && songs.length > 0) { playSong(0); return; }
+    if (audio.paused) audio.play().catch(() => {});
+    else audio.pause();
+  });
+  document.getElementById('btnPrev')?.addEventListener('click', () => playSong(currentSongIndex - 1));
+  document.getElementById('btnNext')?.addEventListener('click', () => playSong(currentSongIndex + 1));
+  document.getElementById('volumeSlider')?.addEventListener('input', (e) => {
+    audio.volume = parseFloat((e.target as HTMLInputElement).value);
+  });
+  document.getElementById('progressTrack')?.addEventListener('click', (e) => {
+    if (!audio.duration) return;
+    const rect = (document.getElementById('progressTrack') as HTMLElement).getBoundingClientRect();
+    audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration;
+  });
+
+  function formatTime(s: number): string {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  }
+
+  // Handle popstate (browser back/forward)
+  window.addEventListener('popstate', () => {
+    const id = getAlbumIdFromUrl();
+    if (id) {
+      loadAlbumDetail(id);
+      showView('detail');
+    } else {
+      showView('list');
+      stopAudio();
+    }
+  });
+
+  // Init
+  const initialId = getAlbumIdFromUrl();
+  if (initialId) {
+    loadAlbumDetail(initialId);
+    showView('detail');
+  } else {
+    showView('list');
+    loadAlbums();
+  }
+</script>

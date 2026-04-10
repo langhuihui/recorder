@@ -1,0 +1,54 @@
+---
+import AdminLayout from '../../layouts/AdminLayout.astro';
+---
+
+<AdminLayout title="仪表盘">
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card">
+      <div class="stat-icon">🎵</div>
+      <div class="stat-value" id="statSongs">—</div>
+      <div class="stat-label">歌曲总数</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">💿</div>
+      <div class="stat-value" id="statAlbums">—</div>
+      <div class="stat-label">专辑总数</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">快捷操作</div>
+    <div class="form-actions">
+      <a href="/admin/songs" class="btn btn-primary">🎵 管理歌曲</a>
+      <a href="/admin/albums" class="btn btn-outline">💿 管理专辑</a>
+      <a href="/admin/practice" class="btn btn-outline">📁 练唱文件</a>
+      <a href="/albums" class="btn btn-ghost" target="_blank">🌐 查看前台</a>
+    </div>
+  </div>
+
+  <div class="card mt-6">
+    <div class="card-title">🙏 今日灵修</div>
+    <div class="about-verse">
+      <blockquote>
+        "你们歌颂神，歌颂他；歌颂我们的王，歌颂他。因为神是全地的王；你们要用悟性歌颂他。"
+      </blockquote>
+      <cite>— 诗篇 47:6-7</cite>
+    </div>
+  </div>
+</AdminLayout>
+
+<script>
+  async function loadStats() {
+    try {
+      const [songsRes, albumsRes] = await Promise.all([
+        fetch('/api/songs?limit=1'),
+        fetch('/api/albums?limit=1'),
+      ]);
+      const songs = await songsRes.json();
+      const albums = await albumsRes.json();
+      document.getElementById('statSongs')!.textContent = songs.pagination?.total ?? '—';
+      document.getElementById('statAlbums')!.textContent = albums.pagination?.total ?? '—';
+    } catch {}
+  }
+  loadStats();
+</script>

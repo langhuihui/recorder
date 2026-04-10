@@ -1,0 +1,163 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="亚萨诗班" description="亚萨诗班官方网站 — 以歌声荣耀神，以赞美敬拜主">
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-bg"></div>
+    <div class="container">
+      <div class="hero-content">
+        <div class="hero-eyebrow">亚萨诗班 · 官方网站</div>
+        <h1>以歌声<em>荣耀神</em><br/>以赞美敬拜主</h1>
+        <p class="hero-verse">
+          "你们当用诗篇、颂词、灵歌彼此对说，口唱心和地赞美主。"
+          <cite>— 以弗所书 5:19</cite>
+        </p>
+        <div class="hero-actions">
+          <a href="/albums" class="btn btn-accent btn-lg">🎵 浏览专辑</a>
+          <a href="#about" class="btn btn-outline-light btn-lg">了解我们</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- About Section -->
+  <section class="section section-alt" id="about">
+    <div class="container">
+      <div class="about-grid">
+        <div class="about-img">
+          <img src="/img/choir.jpg" alt="亚萨诗班合唱" onerror="this.parentElement.innerHTML='<div class=\'about-img-placeholder\'>🎶</div>'" />
+        </div>
+        <div class="about-text">
+          <div class="section-eyebrow">关于我们</div>
+          <h2>亚萨诗班</h2>
+          <p>
+            亚萨（Asaph）是圣经中蒙神拣选的利未族歌唱领班，诗篇中有多篇归于他名下。
+            以他命名的亚萨诗班，承继这份蒙恩的使命——以诗歌赞美、以歌声敬拜、以声音传递神的荣耀与慈爱。
+          </p>
+          <p>
+            我们相信，音乐是神赐予人类最珍贵的礼物之一，是连接心灵与神的桥梁。
+            每一首圣诗，都是一篇祷告；每一次排练，都是一次敬拜。
+          </p>
+          <div class="about-verse">
+            <blockquote>
+              "亚萨和他的弟兄们事奉的职分：用铙钹、瑟、琴赞美神，
+              照着神所赐给大卫的旨意奉事神。"
+            </blockquote>
+            <cite>— 历代志上 25:6</cite>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bible Verses Section -->
+  <section class="section">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-eyebrow">圣经经文</div>
+        <h2 class="section-title">以神的话语为基础</h2>
+        <p class="section-subtitle">诗歌赞美植根于圣经，每一首诗都是对神话语的回应</p>
+      </div>
+      <div class="verses-grid">
+        <div class="verse-card">
+          <blockquote>
+            "你们要赞美耶和华！在他的圣所赞美他，在他显能力的穹苍赞美他。"
+          </blockquote>
+          <cite>诗篇 150:1</cite>
+        </div>
+        <div class="verse-card">
+          <blockquote>
+            "要用诗篇、颂词、灵歌互相教导，互相劝戒，心被恩感，歌颂神。"
+          </blockquote>
+          <cite>歌罗西书 3:16</cite>
+        </div>
+        <div class="verse-card">
+          <blockquote>
+            "我一生要赞美耶和华，我还活的时候要歌颂我的神。"
+          </blockquote>
+          <cite>诗篇 146:2</cite>
+        </div>
+        <div class="verse-card">
+          <blockquote>
+            "凡有气息的，都要赞美耶和华！你们要赞美耶和华！"
+          </blockquote>
+          <cite>诗篇 150:6</cite>
+        </div>
+        <div class="verse-card">
+          <blockquote>
+            "我的心哪，你要称颂耶和华！我的心中所有的，都要称颂他的圣名！"
+          </blockquote>
+          <cite>诗篇 103:1</cite>
+        </div>
+        <div class="verse-card">
+          <blockquote>
+            "耶和华，你的慈爱上及诸天，你的信实达到穹苍。"
+          </blockquote>
+          <cite>诗篇 36:5</cite>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Albums Preview Section -->
+  <section class="section section-alt">
+    <div class="container">
+      <div class="section-header">
+        <div class="section-eyebrow">音乐专辑</div>
+        <h2 class="section-title">聆听神的荣耀</h2>
+        <p class="section-subtitle">探索我们录制的诗班专辑，每一曲都是对神的深情赞美</p>
+      </div>
+      <div id="home-albums" class="albums-preview-grid">
+        <div class="loading">加载专辑中...</div>
+      </div>
+      <div class="text-center mt-6">
+        <a href="/albums" class="btn btn-primary btn-lg">查看全部专辑 →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="cta-section">
+    <div class="container">
+      <h2>🎶 愿你的赞美充满这殿</h2>
+      <p>无论你在哪里，愿这些圣诗触动你的心灵，带领你进入神的同在</p>
+      <a href="/albums" class="btn btn-accent btn-lg">开始聆听</a>
+    </div>
+  </section>
+</Layout>
+
+<script>
+  // 首页专辑预览
+  async function loadHomeAlbums() {
+    const container = document.getElementById('home-albums');
+    if (!container) return;
+    try {
+      const res = await fetch('/api/albums?limit=4');
+      if (!res.ok) throw new Error('加载失败');
+      const { data } = await res.json();
+      if (!data || data.length === 0) {
+        container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>专辑即将上线，敬请期待</p></div>';
+        return;
+      }
+      container.innerHTML = data.map((album: any) => `
+        <a href="/albums/${album.id}" class="album-card">
+          <div class="album-cover">
+            ${album.cover_url
+              ? `<img src="${album.cover_url}" alt="${album.title}" loading="lazy">`
+              : '<div class="album-cover-placeholder">🎵</div>'}
+            <div class="album-cover-overlay"><div class="play-icon">▶</div></div>
+          </div>
+          <div class="album-info">
+            <div class="album-title">${album.title}</div>
+            <div class="album-meta">${album.song_count || 0} 首歌曲</div>
+          </div>
+        </a>
+      `).join('');
+    } catch {
+      container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>专辑即将上线，敬请期待</p></div>';
+    }
+  }
+  loadHomeAlbums();
+</script>
