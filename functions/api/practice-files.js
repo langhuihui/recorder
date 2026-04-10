@@ -1,6 +1,8 @@
 // GET /api/practice-files - list practice files (optional song_id)
 // POST /api/practice-files - upload a practice file (requires song_id, practice song)
 
+import { effectiveSongKind } from './_songKind.js';
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -95,11 +97,12 @@ export async function onRequestPost(context) {
       return json({ error: '必须指定所属练唱歌曲（song_id）' }, 400);
     }
 
-    const song = await env.ASC_DB.prepare('SELECT id, song_kind FROM songs WHERE id = ?').bind(songId).first();
+    const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(songId).first();
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
-    if (song.song_kind !== 'practice') {
+    const kind = await effectiveSongKind(env, song);
+    if (kind !== 'practice') {
       return json({ error: '练习文件只能关联到练唱歌曲' }, 400);
     }
 

@@ -1,5 +1,10 @@
 // GET /api/public/songs - 公开 API：获取歌曲列表（含资源概要）
 
+import {
+  fetchSongsByKindLegacy,
+  isMissingSongKindColumnError,
+} from '../_songKind.js';
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -28,12 +33,26 @@ export async function onRequestGet(context) {
   const baseUrl = url.origin;
 
   try {
-    const countResult = await env.ASC_DB.prepare(
-      "SELECT COUNT(*) as total FROM songs WHERE song_kind = 'practice'"
-    ).first();
-    const songs = await env.ASC_DB.prepare(
-      "SELECT * FROM songs WHERE song_kind = 'practice' ORDER BY created_at DESC LIMIT ? OFFSET ?"
-    ).bind(limit, offset).all();
+    let countResult;
+    let songs;
+    try {
+      countResult = await env.ASC_DB.prepare(
+        "SELECT COUNT(*) as total FROM songs WHERE song_kind = 'practice'"
+      ).first();
+      songs = await env.ASC_DB.prepare(
+        "SELECT * FROM songs WHERE song_kind = 'practice' ORDER BY created_at DESC LIMIT ? OFFSET ?"
+      )
+        .bind(limit, offset)
+        .all();
+    } catch (e) {
+      if (!isMissingSongKindColumnError(e)) throw e;
+      ({ countResult, songs } = await fetchSongsByKindLegacy(
+        env,
+        'practice',
+        limit,
+        offset
+      ));
+    }
 
     const songList = await Promise.all(songs.results.map(async (song) => {
       // 获取歌谱数量

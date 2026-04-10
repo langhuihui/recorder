@@ -1,5 +1,7 @@
 // GET /api/public/songs/:id - 公开 API：获取歌曲详情（含全部资源 URL）
 
+import { effectiveSongKind } from '../../_songKind.js';
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -30,7 +32,8 @@ export async function onRequestGet(context) {
     if (!song) {
       return json({ error: '歌曲不存在' }, 404);
     }
-    if (song.song_kind !== 'practice') {
+    const kind = await effectiveSongKind(env, song);
+    if (kind !== 'practice') {
       return json({ error: '该资源为专辑欣赏内容，请从专辑页面收听' }, 404);
     }
 

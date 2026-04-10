@@ -2,6 +2,8 @@
 // DELETE /api/albums/:id/songs - 从专辑移除歌曲
 // PUT /api/albums/:id/songs - 更新歌曲排序
 
+import { effectiveSongKind } from '../../_songKind.js';
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -47,11 +49,12 @@ export async function onRequestPost(context) {
 
     const stmts = [];
     for (const songId of song_ids) {
-      const song = await env.ASC_DB.prepare('SELECT id, song_kind FROM songs WHERE id = ?').bind(songId).first();
+      const song = await env.ASC_DB.prepare('SELECT * FROM songs WHERE id = ?').bind(songId).first();
       if (!song) {
         return json({ error: `歌曲不存在: ${songId}` }, 400);
       }
-      if (song.song_kind !== 'album') {
+      const kind = await effectiveSongKind(env, song);
+      if (kind !== 'album') {
         return json({ error: '只能将「专辑歌曲」加入专辑，练唱歌曲请使用练唱管理' }, 400);
       }
 

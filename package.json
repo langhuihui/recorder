@@ -8,8 +8,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "deploy": "astro build && wrangler pages deploy dist",
-    "db:migrate": "wrangler d1 execute asc --local --file=./migrations/0001_init.sql && wrangler d1 execute asc --local --file=./migrations/0002_albums.sql && wrangler d1 execute asc --local --file=./migrations/0003_practice_files.sql && wrangler d1 execute asc --local --file=./migrations/0004_admin_users.sql && wrangler d1 execute asc --local --file=./migrations/0005_audio_part_label.sql",
-    "db:migrate:remote": "wrangler d1 execute asc --remote --file=./migrations/0001_init.sql && wrangler d1 execute asc --remote --file=./migrations/0002_albums.sql && wrangler d1 execute asc --remote --file=./migrations/0003_practice_files.sql && wrangler d1 execute asc --remote --file=./migrations/0004_admin_users.sql && wrangler d1 execute asc --remote --file=./migrations/0005_audio_part_label.sql"
+    "db:migrate": "wrangler d1 execute asc --local --file=./migrations/0001_init.sql && wrangler d1 execute asc --local --file=./migrations/0002_albums.sql && wrangler d1 execute asc --local --file=./migrations/0003_practice_files.sql && wrangler d1 execute asc --local --file=./migrations/0004_admin_users.sql && wrangler d1 execute asc --local --file=./migrations/0005_audio_part_label.sql && wrangler d1 execute asc --local --file=./migrations/0006_song_kind_practice_file_song.sql",
+    "db:migrate:remote": "wrangler d1 execute asc --remote --file=./migrations/0001_init.sql && wrangler d1 execute asc --remote --file=./migrations/0002_albums.sql && wrangler d1 execute asc --remote --file=./migrations/0003_practice_files.sql && wrangler d1 execute asc --remote --file=./migrations/0004_admin_users.sql && wrangler d1 execute asc --remote --file=./migrations/0005_audio_part_label.sql && wrangler d1 execute asc --remote --file=./migrations/0006_song_kind_practice_file_song.sql"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^13.1.8",

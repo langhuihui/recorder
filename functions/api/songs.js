@@ -1,6 +1,11 @@
 // GET /api/songs - 获取歌曲列表
 // POST /api/songs - 创建新歌曲
 
+import {
+  fetchSongsByKindLegacy,
+  isMissingSongKindColumnError,
+} from './_songKind.js';
+
 function generateId() {
   return crypto.randomUUID();
 }
@@ -22,27 +27,6 @@ function json(data, status = 200) {
 
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
-}
-
-function isMissingSongKindColumnError(e) {
-  const msg = String(e?.message || e || '');
-  return msg.includes('no such column') && msg.includes('song_kind');
-}
-
-/** 未执行 0006 迁移时：用 album_songs 成员关系近似 song_kind */
-async function fetchSongsByKindLegacy(env, kindFilter, limit, offset) {
-  const inAlbum = 'id IN (SELECT song_id FROM album_songs)';
-  const notInAlbum = 'id NOT IN (SELECT song_id FROM album_songs)';
-  const where = kindFilter === 'album' ? inAlbum : notInAlbum;
-  const countResult = await env.ASC_DB.prepare(
-    `SELECT COUNT(*) as total FROM songs WHERE ${where}`
-  ).first();
-  const songs = await env.ASC_DB.prepare(
-    `SELECT * FROM songs WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
-  )
-    .bind(limit, offset)
-    .all();
-  return { countResult, songs };
 }
 
 // 获取歌曲列表
