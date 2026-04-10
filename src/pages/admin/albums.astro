@@ -34,7 +34,7 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
         <label class="form-label">封面图片</label>
         <div class="album-cover-upload" id="album-cover-zone">
           <div id="album-cover-preview" class="album-cover-preview">
-            <div class="upload-icon">🖼️</div>
+            <div class="upload-icon"><i class="icon icon-image icon-2xl"></i></div>
             <p>点击选择封面图片</p>
           </div>
           <input type="file" id="album-cover-input" accept="image/*" hidden>
@@ -112,14 +112,14 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
       const res = await fetch(`${API}/albums?page=${page}&limit=12`);
       const { data, pagination } = await res.json();
       if (!data || data.length === 0) {
-        listEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon">💿</div><p>还没有专辑，点击创建按钮添加</p><button class="btn btn-primary" onclick="switchView('create-album')">+ 创建专辑</button></div>`;
+        listEl.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="empty-icon"><i class="icon icon-disc icon-3xl"></i></div><p>还没有专辑，点击创建按钮添加</p><button class="btn btn-primary" onclick="switchView('create-album')">+ 创建专辑</button></div>`;
         document.getElementById('album-pagination')!.innerHTML = '';
         return;
       }
       listEl.innerHTML = data.map((album: any) => `
         <div class="album-card" onclick="viewAlbum('${album.id}')">
           <div class="album-cover">
-            ${album.cover_url ? `<img src="${album.cover_url}" alt="${escapeHtml(album.title)}" loading="lazy">` : '<div class="album-cover-placeholder">💿</div>'}
+            ${album.cover_url ? `<img src="${album.cover_url}" alt="${escapeHtml(album.title)}" loading="lazy">` : '<div class="album-cover-placeholder"><i class="icon icon-disc icon-2xl"></i></div>'}
             <div class="album-cover-overlay"><div class="play-icon">▶</div></div>
           </div>
           <div class="album-info">
@@ -154,21 +154,21 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
       let html = `<div class="card">
         <div class="album-detail-inner" style="margin-bottom:20px">
           <div class="album-detail-cover" style="background:var(--primary-dark);color:rgba(255,255,255,0.3)">
-            ${album.cover_url ? `<img src="${album.cover_url}" alt="封面" style="width:100%;height:100%;object-fit:cover">` : '💿'}
+            ${album.cover_url ? `<img src="${album.cover_url}" alt="封面" style="width:100%;height:100%;object-fit:cover">` : '<i class="icon icon-disc icon-3xl"></i>'}
           </div>
           <div class="album-detail-info">
             <h2 style="font-size:1.3rem;font-weight:800;color:var(--text);margin-bottom:8px">${escapeHtml(album.title)}</h2>
             ${album.description ? `<p style="color:var(--text-muted);margin-bottom:12px">${escapeHtml(album.description)}</p>` : ''}
             <p style="font-size:0.85rem;color:var(--text-muted)">${(album.songs||[]).length} 首歌曲 · 创建于 ${formatDate(album.created_at)}</p>
             <div class="form-actions" style="margin-top:16px">
-              <button class="btn btn-outline btn-sm" onclick="editAlbum('${album.id}')">✏️ 编辑</button>
-              <button class="btn btn-danger btn-sm" onclick="deleteAlbum('${album.id}','${escapeHtml(album.title)}')">🗑️ 删除</button>
-              <a href="/albums/${album.id}" target="_blank" class="btn btn-ghost btn-sm">🔗 前台预览</a>
+              <button class="btn btn-outline btn-sm" onclick="editAlbum('${album.id}')"><i class="icon icon-edit"></i> 编辑</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteAlbum('${album.id}','${escapeHtml(album.title)}')"><i class="icon icon-trash"></i> 删除</button>
+              <a href="/albums/${album.id}" target="_blank" class="btn btn-ghost btn-sm"><i class="icon icon-link"></i> 前台预览</a>
             </div>
           </div>
         </div>`;
       if (album.songs?.length) {
-        html += `<div><h3 style="font-size:0.95rem;font-weight:700;margin-bottom:12px">🎵 歌曲列表</h3><div class="song-list">`;
+        html += `<div><h3 style="font-size:0.95rem;font-weight:700;margin-bottom:12px"><i class="icon icon-music"></i> 歌曲列表</h3><div class="song-list">`;
         album.songs.forEach((song: any, i: number) => {
           html += `<div class="song-item" style="cursor:default">
             <div class="song-num">${i+1}</div>
@@ -308,7 +308,7 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
     } else if (url) {
       el.innerHTML = `<img src="${url}" alt="封面" style="width:100%;height:100%;object-fit:cover">`;
     } else {
-      el.innerHTML = `<div class="upload-icon">🖼️</div><p>点击选择封面图片</p>`;
+      el.innerHTML = `<div class="upload-icon"><i class="icon icon-image icon-2xl"></i></div><p>点击选择封面图片</p>`;
     }
   }
 
@@ -389,6 +389,16 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
       }
     });
   }
+
+  // 挂载到 window 供 inline onclick 调用
+  (window as any).switchView = switchView;
+  (window as any).submitAlbum = submitAlbum;
+  (window as any).viewAlbum = viewAlbum;
+  (window as any).loadAlbums = loadAlbums;
+  (window as any).editAlbum = editAlbum;
+  (window as any).deleteAlbum = deleteAlbum;
+  (window as any).toggleAlbumSong = toggleAlbumSong;
+  (window as any).removeAlbumSong = removeAlbumSong;
 
   document.addEventListener('DOMContentLoaded', () => {
     initAlbumCoverUpload();

@@ -13,11 +13,11 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
   <!-- 分类过滤 -->
   <div class="track-type-tabs" style="margin-bottom:20px" id="categoryTabs">
     <button class="track-tab active" data-cat="">全部</button>
-    <button class="track-tab" data-cat="sheet">📄 歌谱</button>
-    <button class="track-tab" data-cat="audio">🎵 音频</button>
-    <button class="track-tab" data-cat="video">🎬 视频</button>
-    <button class="track-tab" data-cat="doc">📋 文档</button>
-    <button class="track-tab" data-cat="other">📦 其他</button>
+    <button class="track-tab" data-cat="sheet"><i class="icon icon-file-text"></i> 歌谱</button>
+    <button class="track-tab" data-cat="audio"><i class="icon icon-music"></i> 音频</button>
+    <button class="track-tab" data-cat="video"><i class="icon icon-video"></i> 视频</button>
+    <button class="track-tab" data-cat="doc"><i class="icon icon-clipboard"></i> 文档</button>
+    <button class="track-tab" data-cat="other"><i class="icon icon-package"></i> 其他</button>
   </div>
 
   <!-- 文件列表 -->
@@ -36,21 +36,21 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
       <div class="form-group">
         <label class="form-label">文件分类</label>
         <select id="upload-category" class="form-input">
-          <option value="sheet">📄 歌谱</option>
-          <option value="audio">🎵 音频</option>
-          <option value="video">🎬 视频</option>
-          <option value="doc">📋 文档</option>
-          <option value="other">📦 其他</option>
+          <option value="sheet">歌谱</option>
+          <option value="audio">音频</option>
+          <option value="video">视频</option>
+          <option value="doc">文档</option>
+          <option value="other">其他</option>
         </select>
       </div>
       <div class="form-group">
         <label class="form-label">文件描述（可选）</label>
-        <input type="text" id="upload-desc" class="form-input" placeholder="如：2024年圣诞节歌谱">
+        <input type="text" id="upload-desc" class="form-input" placeholder="如：2024年练习歌谱">
       </div>
       <div class="form-group">
         <label class="form-label">选择文件 <span class="required">*</span></label>
         <div class="upload-zone" id="practice-upload-zone">
-          <div class="upload-icon">📁</div>
+          <div class="upload-icon"><i class="icon icon-folder icon-2xl"></i></div>
           <p>拖拽文件到此处或点击选择</p>
           <p class="hint">支持 PDF、图片、音频、视频等格式</p>
           <input type="file" id="practice-files" multiple hidden>
@@ -99,8 +99,8 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
   }
 
   function getCatIcon(cat: string) {
-    const icons: Record<string,string> = { sheet:'📄', audio:'🎵', video:'🎬', doc:'📋', other:'📦' };
-    return icons[cat] || '📁';
+    const icons: Record<string,string> = { sheet:'<i class="icon icon-file-text"></i>', audio:'<i class="icon icon-music"></i>', video:'<i class="icon icon-video"></i>', doc:'<i class="icon icon-clipboard"></i>', other:'<i class="icon icon-package"></i>' };
+    return icons[cat] || '<i class="icon icon-folder"></i>';
   }
 
   // Category tabs
@@ -125,7 +125,7 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
       if (!res.ok) throw new Error('加载失败');
       const { data, pagination } = await res.json();
       if (!data || data.length === 0) {
-        listEl.innerHTML = `<div class="empty-state"><div class="empty-icon">📁</div><p>暂无文件，点击上传按钮添加</p></div>`;
+        listEl.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="icon icon-folder icon-3xl"></i></div><p>暂无文件，点击上传按钮添加</p></div>`;
         pageEl.innerHTML = '';
         return;
       }
@@ -150,7 +150,7 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
         pageEl.innerHTML = html;
       } else pageEl.innerHTML = '';
     } catch(e: any) {
-      listEl.innerHTML = `<div class="empty-state"><div class="empty-icon">📁</div><p>暂无练唱文件</p></div>`;
+      listEl.innerHTML = `<div class="empty-state"><div class="empty-icon"><i class="icon icon-folder icon-3xl"></i></div><p>暂无练唱文件</p></div>`;
       pageEl.innerHTML = '';
     }
   }
@@ -229,6 +229,13 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
       loadFiles(1);
     } catch(e: any) { hideOverlay(); toast(`上传失败: ${e.message}`, 'error'); }
   }
+
+  // 挂载到 window 供 inline onclick 调用
+  (window as any).closeUploadModal = closeUploadModal;
+  (window as any).uploadPracticeFiles = uploadPracticeFiles;
+  (window as any).deleteFile = deleteFile;
+  (window as any).loadFiles = loadFiles;
+  (window as any).removePracticeFile = removePracticeFile;
 
   document.addEventListener('DOMContentLoaded', () => {
     initPracticeUpload();

@@ -6,7 +6,7 @@ import Layout from '../../layouts/Layout.astro';
   <!-- Page Hero -->
   <div class="page-hero" id="pageHero">
     <div class="container">
-      <h1>🎵 音乐专辑</h1>
+      <h1><i class="icon icon-music"></i> 音乐专辑</h1>
       <p>"你们当用诗篇、颂词、灵歌彼此对说，口唱心和地赞美主。" — 以弗所书 5:19</p>
     </div>
   </div>
@@ -26,7 +26,7 @@ import Layout from '../../layouts/Layout.astro';
       <div class="container">
         <div class="album-detail-inner">
           <div class="album-detail-cover" id="albumCover">
-            <span>🎵</span>
+            <span><i class="icon icon-music icon-2xl"></i></span>
           </div>
           <div id="albumInfo" class="album-detail-info">
             <h1 style="color:#fff;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;margin-bottom:8px">加载中...</h1>
@@ -46,9 +46,9 @@ import Layout from '../../layouts/Layout.astro';
           <div class="track-type-tabs" id="trackTypeTabs"></div>
           <div class="track-type-tabs" id="partTabs"></div>
           <div class="player-controls">
-            <button class="player-btn" id="btnPrev" title="上一首">⏮</button>
+            <button class="player-btn" id="btnPrev" title="上一首"><i class="icon icon-skip-back"></i></button>
             <button class="player-btn play-pause" id="btnPlay">▶</button>
-            <button class="player-btn" id="btnNext" title="下一首">⏭</button>
+            <button class="player-btn" id="btnNext" title="下一首"><i class="icon icon-skip-forward"></i></button>
             <div class="player-progress">
               <div class="player-track" id="progressTrack">
                 <div class="player-track-fill" id="progressFill"></div>
@@ -59,7 +59,7 @@ import Layout from '../../layouts/Layout.astro';
               </div>
             </div>
             <div class="player-volume">
-              🔊
+              <i class="icon icon-volume"></i>
               <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="1">
             </div>
           </div>
@@ -117,14 +117,14 @@ import Layout from '../../layouts/Layout.astro';
       if (!res.ok) throw new Error();
       const { data, pagination } = await res.json();
       if (!data || data.length === 0) {
-        container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>暂无专辑，敬请期待</p></div>';
+        container.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="icon icon-music icon-3xl"></i></div><p>暂无专辑，敬请期待</p></div>';
         paginationEl.innerHTML = '';
         return;
       }
       container.innerHTML = data.map((album: any) => `
         <div class="album-card" onclick="openAlbum('${album.id}')" style="cursor:pointer">
           <div class="album-cover">
-            ${album.cover_url ? `<img src="${album.cover_url}" alt="${album.title}" loading="lazy">` : '<div class="album-cover-placeholder">🎵</div>'}
+            ${album.cover_url ? `<img src="${album.cover_url}" alt="${album.title}" loading="lazy">` : '<div class="album-cover-placeholder"><i class="icon icon-music icon-2xl"></i></div>'}
             <div class="album-cover-overlay"><div class="play-icon">▶</div></div>
           </div>
           <div class="album-info">
@@ -212,7 +212,7 @@ import Layout from '../../layouts/Layout.astro';
   function renderSongList() {
     const songListContainer = document.getElementById('songListContainer')!;
     if (songs.length === 0) {
-      songListContainer.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>该专辑暂无歌曲</p></div>';
+      songListContainer.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="icon icon-music icon-3xl"></i></div><p>该专辑暂无歌曲</p></div>';
       return;
     }
     songListContainer.innerHTML = `
@@ -253,7 +253,7 @@ import Layout from '../../layouts/Layout.astro';
   }
 
   function renderTrackTypeTabs(song: any, types: string[]) {
-    const labels: Record<string,string> = { accompaniment: '🎹 伴奏', vocal: '🎤 范唱' };
+    const labels: Record<string,string> = { accompaniment: '<i class="icon icon-piano"></i> 伴奏', vocal: '<i class="icon icon-mic"></i> 范唱' };
     const el = document.getElementById('trackTypeTabs')!;
     el.innerHTML = types.map(t =>
       `<button class="track-tab${t === currentTrackType ? ' active' : ''}" onclick="switchTrackType('${t}')">${labels[t] || t}</button>`
@@ -351,6 +351,14 @@ import Layout from '../../layouts/Layout.astro';
       stopAudio();
     }
   });
+
+  // 挂载到 window 供 inline onclick 调用
+  (window as any).openAlbum = openAlbum;
+  (window as any).loadAlbums = loadAlbums;
+  (window as any).goBackToList = goBackToList;
+  (window as any).playSong = playSong;
+  (window as any).switchTrackType = switchTrackType;
+  (window as any).switchPart = switchPart;
 
   // Init
   const initialId = getAlbumIdFromUrl();

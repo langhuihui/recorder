@@ -2,20 +2,20 @@
 import Layout from '../layouts/Layout.astro';
 ---
 
-<Layout title="亚萨诗班" description="亚萨诗班官方网站 — 以歌声荣耀神，以赞美敬拜主">
+<Layout title="亚萨诗班" description="亚萨诗班 — 以歌声荣耀神，以赞美敬拜主">
   <!-- Hero Section -->
   <section class="hero">
     <div class="hero-bg"></div>
     <div class="container">
       <div class="hero-content">
-        <div class="hero-eyebrow">亚萨诗班 · 官方网站</div>
+        <div class="hero-eyebrow">亚萨诗班</div>
         <h1>以歌声<em>荣耀神</em><br/>以赞美敬拜主</h1>
         <p class="hero-verse">
           "你们当用诗篇、颂词、灵歌彼此对说，口唱心和地赞美主。"
           <cite>— 以弗所书 5:19</cite>
         </p>
         <div class="hero-actions">
-          <a href="/albums" class="btn btn-accent btn-lg">🎵 浏览专辑</a>
+          <a href="/albums" class="btn btn-accent btn-lg"><i class="icon icon-music"></i> 浏览专辑</a>
           <a href="#about" class="btn btn-outline-light btn-lg">了解我们</a>
         </div>
       </div>
@@ -27,7 +27,7 @@ import Layout from '../layouts/Layout.astro';
     <div class="container">
       <div class="about-grid">
         <div class="about-img">
-          <img src="/img/choir.jpg" alt="亚萨诗班合唱" onerror="this.parentElement.innerHTML='<div class=\'about-img-placeholder\'>🎶</div>'" />
+          <img src="/img/choir.jpg" alt="亚萨诗班合唱" onerror="this.parentElement.innerHTML='<div class=\'about-img-placeholder\'><i class=\'icon icon-music2 icon-3xl\'></i></div>'" />
         </div>
         <div class="about-text">
           <div class="section-eyebrow">关于我们</div>
@@ -121,7 +121,7 @@ import Layout from '../layouts/Layout.astro';
   <!-- CTA Section -->
   <section class="cta-section">
     <div class="container">
-      <h2>🎶 愿你的赞美充满这殿</h2>
+      <h2><i class="icon icon-music2"></i> 愿你的赞美充满这殿</h2>
       <p>无论你在哪里，愿这些圣诗触动你的心灵，带领你进入神的同在</p>
       <a href="/albums" class="btn btn-accent btn-lg">开始聆听</a>
     </div>
@@ -138,7 +138,7 @@ import Layout from '../layouts/Layout.astro';
       if (!res.ok) throw new Error('加载失败');
       const { data } = await res.json();
       if (!data || data.length === 0) {
-        container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>专辑即将上线，敬请期待</p></div>';
+        container.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="icon icon-music icon-3xl"></i></div><p>专辑即将上线，敬请期待</p></div>';
         return;
       }
       container.innerHTML = data.map((album: any) => `
@@ -146,7 +146,7 @@ import Layout from '../layouts/Layout.astro';
           <div class="album-cover">
             ${album.cover_url
               ? `<img src="${album.cover_url}" alt="${album.title}" loading="lazy">`
-              : '<div class="album-cover-placeholder">🎵</div>'}
+              : '<div class="album-cover-placeholder"><i class="icon icon-music icon-2xl"></i></div>'}
             <div class="album-cover-overlay"><div class="play-icon">▶</div></div>
           </div>
           <div class="album-info">
@@ -156,8 +156,7 @@ import Layout from '../layouts/Layout.astro';
         </a>
       `).join('');
     } catch {
-      container.innerHTML = '<div class="empty-state"><div class="empty-icon">🎵</div><p>专辑即将上线，敬请期待</p></div>';
+      container.innerHTML = '<div class="empty-state"><div class="empty-icon"><i class="icon icon-music icon-3xl"></i></div><p>专辑即将上线，敬请期待</p></div>';
     }
   }
-  loadHomeAlbums();
-</script>
+  l

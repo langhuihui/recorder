@@ -33,6 +33,7 @@ export async function onRequestPost(context) {
     const formData = await request.formData();
     const fileType = formData.get('type'); // 'sheet', 'accompaniment', 'vocal'
     const partName = formData.get('part_name') || 'default'; // 声部名称
+    const partLabel = formData.get('part_label') || ''; // 声部中文名（如：女高、女低、男高、男低）
     const files = formData.getAll('files');
 
     if (!files || files.length === 0) {
@@ -60,7 +61,7 @@ export async function onRequestPost(context) {
         }
       } else {
         // 上传音频
-        const result = await uploadAudioTrack(env, file, id, fileType, partName);
+        const result = await uploadAudioTrack(env, file, id, fileType, partName, partLabel);
         results.push(result);
       }
     }
@@ -96,7 +97,7 @@ async function uploadSheetImage(env, file, songId) {
   return { id, type: 'sheet', file_key: fileKey, sort_order: sortOrder };
 }
 
-async function uploadAudioTrack(env, file, songId, trackType, partName) {
+async function uploadAudioTrack(env, file, songId, trackType, partName, partLabel) {
   const id = crypto.randomUUID();
   const ext = file.name.split('.').pop().toLowerCase();
   const fileKey = `songs/${songId}/audio/${trackType}/${partName}.${ext}`;
@@ -117,17 +118,17 @@ async function uploadAudioTrack(env, file, songId, trackType, partName) {
     await env.ASC_BUCKET.delete(existing.file_key);
     // 更新记录
     await env.ASC_DB.prepare(
-      'UPDATE audio_tracks SET file_key = ?, file_size = ? WHERE id = ?'
-    ).bind(fileKey, arrayBuffer.byteLength, existing.id).run();
-    return { id: existing.id, type: trackType, part_name: partName, file_key: fileKey, updated: true };
+      'UPDATE audio_tracks SET file_key = ?, file_size = ?, part_label = ? WHERE id = ?'
+    ).bind(fileKey, arrayBuffer.byteLength, partLabel, existing.id).run();
+    return { id: existing.id, type: trackType, part_name: partName, part_label: partLabel, file_key: fileKey, updated: true };
   }
 
   // 插入新记录
   await env.ASC_DB.prepare(
-    'INSERT INTO audio_tracks (id, song_id, track_type, part_name, file_key, file_size) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(id, songId, trackType, partName, fileKey, arrayBuffer.byteLength).run();
+    'INSERT INTO audio_tracks (id, song_id, track_type, part_name, part_label, file_key, file_size) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, songId, trackType, partName, partLabel, fileKey, arrayBuffer.byteLength).run();
 
-  return { id, type: trackType, part_name: partName, file_key: fileKey };
+  return { id, type: trackType, part_name: partName, part_label: partLabel, file_key: fileKey };
 }
 
 async function convertPdfToImages(env, file, songId) {

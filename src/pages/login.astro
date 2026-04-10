@@ -1,0 +1,187 @@
+---
+import '../styles/global.css';
+---
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 — 亚萨诗班管理后台</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    .login-page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 1rem;
+    }
+    .login-card {
+      background: white;
+      border-radius: 16px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+    }
+    .login-header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    .login-header .logo {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .login-header h1 {
+      font-size: 1.5rem;
+      color: #1a1a2e;
+      margin: 0 0 0.25rem;
+    }
+    .login-header p {
+      color: #666;
+      font-size: 0.875rem;
+      margin: 0;
+    }
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+    .form-group label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #333;
+      margin-bottom: 0.375rem;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+      box-sizing: border-box;
+      outline: none;
+    }
+    .form-group input:focus {
+      border-color: #667eea;
+    }
+    .login-btn {
+      width: 100%;
+      padding: 0.875rem;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .login-btn:hover {
+      opacity: 0.9;
+    }
+    .login-btn:active {
+      transform: scale(0.98);
+    }
+    .login-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .login-error {
+      background: #fee2e2;
+      color: #dc2626;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .login-error.show {
+      display: block;
+    }
+    .login-footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      color: #999;
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="logo"><i class="icon icon-music" style="width:2.5rem;height:2.5rem"></i></div>
+        <h1>亚萨诗班</h1>
+        <p>管理后台登录</p>
+      </div>
+
+      <div class="login-error" id="loginError"></div>
+
+      <form id="loginForm">
+        <div class="form-group">
+          <label for="username">用户名</label>
+          <input type="text" id="username" name="username" autocomplete="username" required placeholder="请输入用户名" />
+        </div>
+        <div class="form-group">
+          <label for="password">密码</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required placeholder="请输入密码" />
+        </div>
+        <button type="submit" class="login-btn" id="loginBtn">登 录</button>
+      </form>
+
+      <div class="login-footer">
+        <p><i class="icon icon-book-open"></i> "你们歌颂神，歌颂他" — 诗篇 47:6</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('loginForm') as HTMLFormElement;
+    const errorDiv = document.getElementById('loginError')!;
+    const loginBtn = document.getElementById('loginBtn') as HTMLButtonElement;
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorDiv.classList.remove('show');
+      loginBtn.disabled = true;
+      loginBtn.textContent = '登录中...';
+
+      const username = (document.getElementById('username') as HTMLInputElement).value.trim();
+      const password = (document.getElementById('password') as HTMLInputElement).value;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          errorDiv.textContent = data.error || '登录失败';
+          errorDiv.classList.add('show');
+          return;
+        }
+
+        // 登录成功，跳转管理后台
+        window.location.href = '/admin';
+      } catch (err) {
+        errorDiv.textContent = '网络错误，请稍后重试';
+        errorDiv.classList.add('show');
+      } finally {
+        loginBtn.disabled = false;
+        loginBtn.textContent = '登 录';
+      }
+    });
+
+    // Enter 键提交
+    document.getElementById('password')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') form.requestSubmit();
+    });
+  </script>
+</body>
+</html>

@@ -21,26 +21,29 @@ const { title = '后台管理' } = Astro.props;
     <!-- 侧边栏 -->
     <aside class="admin-sidebar" id="adminSidebar">
       <div class="sidebar-header">
-        <a href="/" class="sidebar-logo">🎵 亚萨诗班</a>
+        <a href="/" class="sidebar-logo"><i class="icon icon-music"></i> 亚萨诗班</a>
         <button class="sidebar-close" id="sidebarClose" aria-label="关闭侧边栏">✕</button>
       </div>
       <nav class="sidebar-nav">
         <a href="/admin" class="sidebar-link" data-page="dashboard">
-          <span>📊</span> 仪表盘
+          <span><i class="icon icon-bar-chart"></i></span> 仪表盘
         </a>
         <a href="/admin/songs" class="sidebar-link" data-page="songs">
-          <span>🎵</span> 歌曲管理
+          <span><i class="icon icon-music"></i></span> 歌曲管理
         </a>
         <a href="/admin/albums" class="sidebar-link" data-page="albums">
-          <span>💿</span> 专辑管理
+          <span><i class="icon icon-disc"></i></span> 专辑管理
         </a>
         <a href="/admin/practice" class="sidebar-link" data-page="practice">
-          <span>📁</span> 练唱文件
+          <span><i class="icon icon-folder"></i></span> 练唱文件
         </a>
       </nav>
       <div class="sidebar-footer">
         <a href="/" class="sidebar-link">
-          <span>🏠</span> 返回网站
+          <span><i class="icon icon-home"></i></span> 返回网站
+        </a>
+        <a href="#" class="sidebar-link" id="logoutBtn" style="color: #ef4444;">
+          <span>🚪</span> 退出登录
         </a>
       </div>
     </aside>
@@ -90,6 +93,16 @@ const { title = '后台管理' } = Astro.props;
       if (href && (path === href || (href !== '/admin' && path.startsWith(href)))) {
         link.classList.add('active');
       }
+    });
+
+    // 退出登录
+    document.getElementById('logoutBtn')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (!confirm('确定要退出登录吗？')) return;
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch {}
+      window.location.href = '/login';
     });
   </script>
 </body>
