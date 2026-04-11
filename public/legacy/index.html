@@ -12,11 +12,14 @@
     <header class="header">
       <div class="header-inner">
         <h1 class="logo">🎵 歌曲管理</h1>
-        <nav class="nav">
-          <button class="nav-btn active" data-view="list">歌曲列表</button>
-          <button class="nav-btn" data-view="albums">专辑</button>
-          <button class="nav-btn" data-view="upload">上传歌曲</button>
-        </nav>
+        <div class="header-right">
+          <nav class="nav">
+            <button class="nav-btn active" data-view="list">歌曲列表</button>
+            <button class="nav-btn" data-view="albums">专辑</button>
+            <button class="nav-btn" data-view="upload">上传歌曲</button>
+          </nav>
+          <button type="button" class="btn btn-primary btn-sm recorder-entry-btn" id="open-recorder-btn" title="练唱录音">🎙️ 练唱录音</button>
+        </div>
       </div>
     </header>
 
@@ -314,8 +317,174 @@
         </div>
       </div>
     </div>
+
+    <!-- 练唱录音（从 main 录音能力移植，伴奏来自练唱曲库） -->
+    <div id="recorder-root" class="recorder-root hidden" aria-hidden="true">
+      <div class="recorder-shell">
+        <div class="recorder-topbar">
+          <div class="recorder-topbar-title">
+            <span class="recorder-topbar-icon">🎙️</span>
+            <span>练唱录音</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" id="recorder-close-btn">关闭</button>
+        </div>
+
+        <div class="recorder-body">
+          <aside class="recorder-sheets" aria-label="歌谱">
+            <div class="recorder-sheets-head">
+              <span id="recorder-sheet-title" class="recorder-sheets-title">歌谱</span>
+              <button type="button" class="recorder-mobile-text-btn recorder-sheets-pick-song-btn" id="recorder-open-song-modal">选择歌曲</button>
+            </div>
+            <div id="recorder-sheet-scroll" class="recorder-sheet-scroll">
+              <div class="recorder-sheet-no-song">
+                <p class="recorder-sheet-no-song-text">请选择练唱歌曲，加载后将在此显示歌谱</p>
+                <button type="button" class="btn btn-primary recorder-sheet-pick-large" data-recorder-open-pick>选择歌曲</button>
+                <p class="recorder-sheet-no-song-hint-desktop">在右侧「练唱歌曲」中选择歌曲</p>
+              </div>
+            </div>
+          </aside>
+
+          <div class="recorder-main">
+            <div class="recorder-time-row">
+              <span id="recorder-bg-label" class="recorder-bg-label recorder-time-row-bg hidden"></span>
+              <label class="recorder-headphone-toggle">
+                <input type="checkbox" id="recorder-headphone-mode" />
+                <span>耳机模式</span>
+              </label>
+            </div>
+
+            <div class="recorder-waves">
+              <button type="button" class="btn btn-text btn-sm recorder-clear-bg-fab hidden" id="recorder-clear-bg-btn" disabled>清除参考音频</button>
+              <div class="recorder-wave recorder-wave-mic">
+                <span class="recorder-wave-label">麦克风</span>
+                <canvas id="recorder-canvas-mic" class="recorder-canvas" width="700" height="72"></canvas>
+                <span id="recorder-mic-dot" class="recorder-rec-dot hidden" aria-hidden="true"></span>
+              </div>
+              <div class="recorder-wave recorder-wave-bg">
+                <span class="recorder-wave-label">参考</span>
+                <canvas id="recorder-canvas-bg" class="recorder-canvas" width="700" height="88"></canvas>
+              </div>
+              <div class="recorder-wave recorder-wave-mix">
+                <span class="recorder-wave-label" id="recorder-mix-label">录音输出</span>
+                <canvas id="recorder-canvas-mix" class="recorder-canvas" width="700" height="72"></canvas>
+              </div>
+              <div class="recorder-wave recorder-wave-combo">
+                <span class="recorder-wave-label">录音</span>
+                <canvas id="recorder-canvas-combo" class="recorder-canvas" width="700" height="80"></canvas>
+                <span id="recorder-mic-dot-combo" class="recorder-rec-dot hidden" aria-hidden="true"></span>
+              </div>
+            </div>
+
+            <div id="recorder-playback-row" class="recorder-playback hidden">
+              <div class="recorder-seek-wrap">
+                <div class="recorder-seek-fill" id="recorder-seek-fill"></div>
+                <input type="range" id="recorder-seek" class="recorder-seek" min="0" max="0" step="0.01" value="0" aria-label="播放进度" />
+              </div>
+            </div>
+
+            <div class="recorder-picks card recorder-picks-card">
+              <div class="recorder-material">
+                <div class="recorder-picks-desktop">
+                  <div class="recorder-pick-row">
+                    <label class="form-label" for="recorder-song-select">练唱歌曲</label>
+                    <select id="recorder-song-select" class="form-input recorder-select">
+                      <option value="">加载中…</option>
+                    </select>
+                  </div>
+                  <div class="recorder-pick-row">
+                    <label class="form-label" for="recorder-audio-track-select">参考音频</label>
+                    <select id="recorder-audio-track-select" class="form-input recorder-select" disabled>
+                      <option value="">请先选择歌曲</option>
+                    </select>
+                  </div>
+                  <p id="recorder-bg-hint" class="recorder-bg-hint hint" style="margin-bottom:0">
+                    选择歌曲后可选伴奏或四声部范唱作为参考音频。
+                  </p>
+                </div>
+              </div>
+              <div class="recorder-bg-meta" id="recorder-bg-meta" hidden>
+                <div class="recorder-bg-vol">
+                  <span class="recorder-bg-vol-label">参考音量</span>
+                  <input type="range" id="recorder-bg-volume" min="0" max="1" step="0.05" value="0.5" aria-label="参考音量" />
+                  <span id="recorder-bg-volume-pct" class="recorder-bg-vol-pct">50%</span>
+                </div>
+                <div class="recorder-bg-progress-wrap">
+                  <div class="recorder-bg-progress" id="recorder-bg-progress"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="recorder-controls">
+              <div id="recorder-time-display-host" class="recorder-time-display-host">
+                <span id="recorder-time-display" class="recorder-time-display">00:00</span>
+              </div>
+              <div class="recorder-controls-record-row">
+                <button type="button" class="btn btn-primary" id="recorder-start-btn">开始录制</button>
+                <button type="button" class="btn btn-danger hidden" id="recorder-stop-btn">停止</button>
+              </div>
+              <div id="recorder-stopped-actions" class="recorder-stopped-actions hidden">
+                <button type="button" class="btn btn-outline" id="recorder-play-btn" aria-label="播放" title="播放">
+                  <span class="recorder-btn-icon recorder-icon-play" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  </span>
+                  <span class="recorder-btn-icon recorder-icon-pause" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6V5zm8 0h4v14h-4V5z"/></svg>
+                  </span>
+                  <span class="recorder-btn-label">播放</span>
+                </button>
+                <button type="button" class="btn btn-outline" id="recorder-reset-btn" aria-label="重录" title="重录">
+                  <span class="recorder-btn-icon" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4v5h5"/><path d="M20 20v-5h-5"/><path d="M20 9A9 9 0 0 0 6.34 5.65L4 4"/><path d="M4 15a9 9 0 0 0 13.66 3.35L20 20"/></svg>
+                  </span>
+                  <span class="recorder-btn-label">重录</span>
+                </button>
+                <button type="button" class="btn btn-outline" id="recorder-share-btn" aria-label="分享" title="分享">
+                  <span class="recorder-btn-icon" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98"/><path d="m15.41 6.51-6.82 3.98"/></svg>
+                  </span>
+                  <span class="recorder-btn-label">分享</span>
+                </button>
+                <button type="button" class="btn btn-primary" id="recorder-download-btn" aria-label="下载录音" title="下载录音">
+                  <span class="recorder-btn-icon" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 21h16"/></svg>
+                  </span>
+                  <span class="recorder-btn-label">下载录音</span>
+                </button>
+              </div>
+            </div>
+
+            <audio id="recorder-playback-audio" class="hidden" preload="metadata"></audio>
+          </div>
+        </div>
+
+        <div id="recorder-pick-modal" class="recorder-pick-modal hidden" aria-hidden="true">
+          <div class="recorder-pick-modal-backdrop" id="recorder-pick-modal-backdrop"></div>
+          <div class="recorder-pick-modal-panel" role="dialog" aria-modal="true" aria-labelledby="recorder-pick-modal-title">
+            <div class="recorder-pick-modal-head">
+              <span id="recorder-pick-modal-title">选择歌曲</span>
+              <button type="button" class="btn btn-primary btn-sm" id="recorder-pick-modal-done">完成</button>
+            </div>
+            <div class="recorder-pick-modal-body">
+              <div id="recorder-modal-song-block" class="recorder-modal-block">
+                <label class="form-label" for="recorder-mobile-song-select">练唱歌曲</label>
+                <select id="recorder-mobile-song-select" class="form-input recorder-select">
+                  <option value="">加载中…</option>
+                </select>
+              </div>
+              <div id="recorder-modal-audio-block" class="recorder-modal-block">
+                <label class="form-label" for="recorder-modal-audio-track-select">参考音频</label>
+                <select id="recorder-modal-audio-track-select" class="form-input recorder-select" disabled>
+                  <option value="">请先选择歌曲</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/app.js"></script>
+  <script src="recorder.js"></script>
 </body>
 </html>

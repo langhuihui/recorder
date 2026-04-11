@@ -51,6 +51,7 @@ export async function onRequestGet(context) {
     const sheetResources = sheets.results.map(s => ({
       id: s.id,
       type: 'sheet',
+      file_key: s.file_key,
       url: `${baseUrl}/api/files/${s.file_key}`,
       sort_order: s.sort_order,
       width: s.width,

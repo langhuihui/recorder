@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import PracticeRecorderOverlay from '../components/PracticeRecorderOverlay.astro';
 
 interface Props {
   title?: string;
@@ -33,7 +34,14 @@ const { title = 'Asaph Choir', description = 'Asaph Choir — Glorify God with S
       <nav class="main-nav" id="mainNav">
         <a href="/" class="nav-link">首页</a>
         <a href="/albums" class="nav-link">专辑</a>
-
+        <button
+          type="button"
+          class="btn btn-primary btn-sm site-header-recorder-btn"
+          id="open-recorder-btn"
+          title="练唱录音"
+        >
+          🎙️ 练唱录音
+        </button>
       </nav>
     </div>
   </header>
@@ -68,6 +76,8 @@ const { title = 'Asaph Choir', description = 'Asaph Choir — Glorify God with S
       </div>
     </div>
   </footer>
+
+  <PracticeRecorderOverlay />
 
   <script>
     // 移动端菜单切换

@@ -17,6 +17,12 @@ function json(data, status = 200) {
   });
 }
 
+/** True when migration 0006 has been applied (practice_files.song_id exists). */
+async function practiceFilesHasSongIdColumn(db) {
+  const { results } = await db.prepare('PRAGMA table_info(practice_files)').all();
+  return (results || []).some((row) => row.name === 'song_id');
+}
+
 export async function onRequestOptions() {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
@@ -104,7 +110,10 @@ export async function onRequestDelete(context) {
     // 获取所有关联文件
     const sheets = await env.ASC_DB.prepare('SELECT file_key FROM sheet_images WHERE song_id = ?').bind(id).all();
     const tracks = await env.ASC_DB.prepare('SELECT file_key FROM audio_tracks WHERE song_id = ?').bind(id).all();
-    const practiceRows = await env.ASC_DB.prepare('SELECT file_key FROM practice_files WHERE song_id = ?').bind(id).all();
+    const practiceHasSongId = await practiceFilesHasSongIdColumn(env.ASC_DB);
+    const practiceRows = practiceHasSongId
+      ? await env.ASC_DB.prepare('SELECT file_key FROM practice_files WHERE song_id = ?').bind(id).all()
+      : { results: [] };
 
     // 从 R2 删除文件
     const fileKeys = [
@@ -114,7 +123,9 @@ export async function onRequestDelete(context) {
     ];
     await Promise.all(fileKeys.map(key => env.ASC_BUCKET.delete(key)));
 
-    await env.ASC_DB.prepare('DELETE FROM practice_files WHERE song_id = ?').bind(id).run();
+    if (practiceHasSongId) {
+      await env.ASC_DB.prepare('DELETE FROM practice_files WHERE song_id = ?').bind(id).run();
+    }
 
     // 从 D1 删除记录（CASCADE 会自动删除 sheet_images、audio_tracks）
     await env.ASC_DB.prepare('DELETE FROM songs WHERE id = ?').bind(id).run();
