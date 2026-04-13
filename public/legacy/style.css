@@ -1350,6 +1350,43 @@ body {
   background: rgba(0, 0, 0, 0.12);
 }
 
+.recorder-mobile-only {
+  display: none !important;
+}
+
+@media (max-width: 900px) {
+  .recorder-mobile-only {
+    display: inline-flex !important;
+  }
+}
+
+.recorder-sheet-scroll.recorder-drop-hover,
+.recorder-waves.recorder-drop-hover {
+  outline: 2px dashed var(--primary, #6366f1);
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+
+.recorder-sheets-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.recorder-local-row-btns,
+.recorder-modal-local-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.recorder-local-row .form-label {
+  align-self: center;
+}
+
 .recorder-sheets-head {
   flex-shrink: 0;
   display: flex;

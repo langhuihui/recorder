@@ -84,6 +84,24 @@
   let currentSongDetail = null;
   let sheetPageCount = 0;
 
+  /** 参考音频下拉里「本地伴奏」选项的 value */
+  const LOCAL_BG_TRACK_VALUE = 'local:bg';
+
+  /** 持久化的本地伴奏 object URL（切换云端音轨时不撤销，便于再次选用） */
+  let localBgBlobUrl = null;
+  let localBgFileName = '';
+
+  /** @type {{ kind: 'image'; blobUrl: string; name: string } | { kind: 'pdf'; file: File; name: string }}[] */
+  let localSheetEntries = [];
+
+  let localSheetsInput;
+  let localBgBtn;
+  let localBgInput;
+  let modalLocalSheetsBtn;
+  let modalLocalBgBtn;
+  let modalClearLocalSheetsBtn;
+  let wavesEl;
+
   let recordingState = 'idle';
   let audioUrl = null;
   let duration = 0;
@@ -639,16 +657,186 @@
   }
 
   function setBgMusicFromUrl(url, title) {
-    if (bgMusicUrl && bgMusicUrl.startsWith('blob:')) URL.revokeObjectURL(bgMusicUrl);
+    const prev = bgMusicUrl;
     bgMusicUrl = url || null;
     bgMusicTitle = title || '';
     bgDuration = 0;
     bgCurrentTime = 0;
+
+    if (!url) {
+      if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev);
+      localBgBlobUrl = null;
+      localBgFileName = '';
+    } else if (prev && prev.startsWith('blob:')) {
+      const prevWasLocal = prev === localBgBlobUrl;
+      if (!prevWasLocal && prev !== url) URL.revokeObjectURL(prev);
+    }
+
     if (url) {
       probeBgDuration(url);
     }
     updateBgProgressUI();
     initWaveCanvas(bgCanvas, '#60a5fa');
+  }
+
+  /** 切换歌曲加载中时暂停参考音频显示，不撤销本地伴奏 blob */
+  function suspendBgOutputOnly() {
+    bgMusicUrl = null;
+    bgMusicTitle = '';
+    bgDuration = 0;
+    bgCurrentTime = 0;
+    updateBgProgressUI();
+    initWaveCanvas(bgCanvas, '#60a5fa');
+  }
+
+  function setLocalAccompanimentFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith('audio/')) {
+      if (typeof window.toast === 'function') window.toast('请选择音频文件', 'error');
+      return;
+    }
+    if (localBgBlobUrl) {
+      URL.revokeObjectURL(localBgBlobUrl);
+      localBgBlobUrl = null;
+    }
+    localBgBlobUrl = URL.createObjectURL(file);
+    localBgFileName = file.name;
+    bgMusicUrl = localBgBlobUrl;
+    bgMusicTitle = `本地伴奏 · ${file.name}`;
+    bgDuration = 0;
+    bgCurrentTime = 0;
+    probeBgDuration(bgMusicUrl);
+    updateBgProgressUI();
+    initWaveCanvas(bgCanvas, '#60a5fa');
+    buildAudioTrackSelectOptions();
+    if (audioTrackSelectEl) audioTrackSelectEl.value = LOCAL_BG_TRACK_VALUE;
+    syncPicksToMobile();
+    syncBgMetaVisibility();
+    updateMobileAccButtonsState();
+  }
+
+  function updateClearLocalSheetsBtn() {
+    if (!modalClearLocalSheetsBtn) return;
+    modalClearLocalSheetsBtn.classList.toggle('hidden', localSheetEntries.length === 0);
+  }
+
+  function syncSongPickButtonsVisibility() {
+    const hasSong = Boolean(songSelectEl && songSelectEl.value);
+    if (openSongModalBtn) openSongModalBtn.classList.toggle('hidden', !hasSong);
+  }
+
+  function pickFirstAudioFileFromList(files) {
+    const arr = [...files];
+    for (const f of arr) {
+      if (f.type.startsWith('audio/')) return f;
+    }
+    for (const f of arr) {
+      if (/\.(mp3|m4a|aac|wav|ogg|opus|webm|flac)$/i.test(f.name)) return f;
+    }
+    return null;
+  }
+
+  function initRecorderDragDrop() {
+    if (sheetScrollEl) {
+      sheetScrollEl.addEventListener('dragenter', (e) => {
+        if (recordingState === 'recording') return;
+        e.preventDefault();
+        sheetScrollEl.classList.add('recorder-drop-hover');
+      });
+      sheetScrollEl.addEventListener('dragleave', (e) => {
+        if (!sheetScrollEl.contains(e.relatedTarget)) {
+          sheetScrollEl.classList.remove('recorder-drop-hover');
+        }
+      });
+      sheetScrollEl.addEventListener('dragover', (e) => {
+        if (recordingState === 'recording') return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      });
+      sheetScrollEl.addEventListener('drop', (e) => {
+        if (recordingState === 'recording') return;
+        e.preventDefault();
+        sheetScrollEl.classList.remove('recorder-drop-hover');
+        const fl = e.dataTransfer?.files;
+        if (fl?.length) ingestLocalSheetFiles(fl);
+      });
+    }
+
+    if (wavesEl) {
+      wavesEl.addEventListener('dragenter', (e) => {
+        if (recordingState === 'recording') return;
+        e.preventDefault();
+        wavesEl.classList.add('recorder-drop-hover');
+      });
+      wavesEl.addEventListener('dragleave', (e) => {
+        if (!wavesEl.contains(e.relatedTarget)) {
+          wavesEl.classList.remove('recorder-drop-hover');
+        }
+      });
+      wavesEl.addEventListener('dragover', (e) => {
+        if (recordingState === 'recording') return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      });
+      wavesEl.addEventListener('drop', (e) => {
+        if (recordingState === 'recording') return;
+        e.preventDefault();
+        wavesEl.classList.remove('recorder-drop-hover');
+        const fl = e.dataTransfer?.files;
+        if (!fl?.length) return;
+        const audio = pickFirstAudioFileFromList(fl);
+        if (audio) setLocalAccompanimentFile(audio);
+        else if (typeof window.toast === 'function') window.toast('请拖入音频文件', 'error');
+      });
+    }
+  }
+
+  function clearLocalSheets() {
+    if (recordingState === 'recording') return;
+    for (const e of localSheetEntries) {
+      if (e.kind === 'image' && e.blobUrl) URL.revokeObjectURL(e.blobUrl);
+    }
+    localSheetEntries = [];
+    updateClearLocalSheetsBtn();
+    void refreshSheets();
+  }
+
+  function ingestLocalSheetFiles(fileList) {
+    const arr = [...fileList].filter(
+      (f) =>
+        f.type.startsWith('image/') ||
+        f.type === 'application/pdf' ||
+        f.name.toLowerCase().endsWith('.pdf'),
+    );
+    if (!arr.length) {
+      if (typeof window.toast === 'function') window.toast('没有可加载的歌谱（支持图片或 PDF）', 'error');
+      return;
+    }
+    for (const f of arr) {
+      if (f.type.startsWith('image/')) {
+        localSheetEntries.push({ kind: 'image', blobUrl: URL.createObjectURL(f), name: f.name });
+      } else {
+        localSheetEntries.push({ kind: 'pdf', file: f, name: f.name });
+      }
+    }
+    updateClearLocalSheetsBtn();
+    void refreshSheets();
+    if (typeof window.toast === 'function') window.toast(`已添加 ${arr.length} 个本地歌谱文件`, 'success');
+  }
+
+  function buildMergedSheetItems() {
+    const items = [];
+    const serverSheets = currentSongDetail?.resources?.sheets;
+    if (serverSheets?.length) {
+      const sorted = [...serverSheets].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+      for (const s of sorted) items.push({ src: 'server', sheet: s });
+    }
+    for (const e of localSheetEntries) items.push({ src: 'local', entry: e });
+    return items;
+  }
+
+  function refreshSheets() {
+    return renderMergedSheets(buildMergedSheetItems());
   }
 
   function probeBgDuration(url) {
@@ -682,35 +870,39 @@
   function buildAudioTrackSelectOptions() {
     if (!audioTrackSelectEl) return;
     audioTrackSelectEl.innerHTML = '';
-    if (!currentSongDetail) {
-      audioTrackSelectEl.appendChild(new Option('请先选择歌曲', '', true, true));
-      audioTrackSelectEl.disabled = true;
-      syncPicksToMobile();
-      return;
-    }
-    const acc = currentSongDetail.resources?.accompaniment || [];
-    const voc = currentSongDetail.resources?.vocal || [];
-    const accTrack = acc.find((t) => t.part_name === 'default') || acc[0];
-    if (accTrack) {
-      const o = document.createElement('option');
-      o.value = `acc:${accTrack.part_name}`;
-      o.textContent = '伴奏';
-      audioTrackSelectEl.appendChild(o);
-    }
-    VOCAL_PARTS_ORDER.forEach((pn) => {
-      const t = voc.find((v) => v.part_name === pn);
-      if (t) {
+
+    if (currentSongDetail) {
+      const acc = currentSongDetail.resources?.accompaniment || [];
+      const voc = currentSongDetail.resources?.vocal || [];
+      const accTrack = acc.find((t) => t.part_name === 'default') || acc[0];
+      if (accTrack) {
         const o = document.createElement('option');
-        o.value = `voc:${pn}`;
-        const lab = PART_LABELS[pn] || t.part_label || pn;
-        o.textContent = `${lab}范唱`;
+        o.value = `acc:${accTrack.part_name}`;
+        o.textContent = '伴奏';
         audioTrackSelectEl.appendChild(o);
       }
-    });
-    if (audioTrackSelectEl.options.length === 0) {
-      const o = new Option('暂无参考音频', '');
-      o.disabled = true;
+      VOCAL_PARTS_ORDER.forEach((pn) => {
+        const t = voc.find((v) => v.part_name === pn);
+        if (t) {
+          const o = document.createElement('option');
+          o.value = `voc:${pn}`;
+          const lab = PART_LABELS[pn] || t.part_label || pn;
+          o.textContent = `${lab}范唱`;
+          audioTrackSelectEl.appendChild(o);
+        }
+      });
+    }
+
+    if (localBgBlobUrl) {
+      const o = document.createElement('option');
+      o.value = LOCAL_BG_TRACK_VALUE;
+      const shortName = localBgFileName.length > 22 ? `${localBgFileName.slice(0, 20)}…` : localBgFileName;
+      o.textContent = `本地伴奏 · ${shortName}`;
       audioTrackSelectEl.appendChild(o);
+    }
+
+    if (audioTrackSelectEl.options.length === 0) {
+      audioTrackSelectEl.appendChild(new Option('请选择歌曲或添加本地伴奏', '', true, true));
       audioTrackSelectEl.disabled = true;
     } else {
       audioTrackSelectEl.disabled = recordingState === 'recording';
@@ -719,7 +911,20 @@
   }
 
   function applyAudioTrackValue(encoded) {
-    if (!encoded || !currentSongDetail) {
+    if (!encoded) {
+      setBgMusicFromUrl(null, '');
+      return;
+    }
+    if (encoded === LOCAL_BG_TRACK_VALUE) {
+      if (localBgBlobUrl) {
+        const shortName = localBgFileName.length > 40 ? `${localBgFileName.slice(0, 38)}…` : localBgFileName;
+        setBgMusicFromUrl(localBgBlobUrl, `本地伴奏 · ${shortName}`);
+      } else {
+        setBgMusicFromUrl(null, '');
+      }
+      return;
+    }
+    if (!currentSongDetail) {
       setBgMusicFromUrl(null, '');
       return;
     }
@@ -768,121 +973,165 @@
     if (!sheetScrollEl) return;
     sheetScrollEl.innerHTML = `
       <div class="recorder-sheet-no-song">
-        <p class="recorder-sheet-no-song-text">请选择练唱歌曲，加载后将在此显示歌谱</p>
-        <button type="button" class="btn btn-primary recorder-sheet-pick-large" data-recorder-open-pick>选择歌曲</button>
-        <p class="recorder-sheet-no-song-hint-desktop">在右侧「练唱歌曲」中选择歌曲</p>
+        <p class="recorder-sheet-no-song-text">请在右侧选择练唱歌曲；也可将图片或 PDF 拖入此区域作为本地歌谱</p>
+        <button type="button" class="btn btn-primary recorder-sheet-pick-large recorder-mobile-only" id="recorder-sheet-first-pick-btn">选择练唱歌曲</button>
+        <p class="recorder-sheet-no-song-hint-desktop">在右侧「练唱歌曲」中选择歌曲；支持将歌谱文件拖入左侧区域</p>
       </div>`;
   }
 
-  async function renderSheetPages(sheets) {
+  async function renderOnePdfSource(pdfjsLib, docInit, globalNumRef, frag) {
+    const pdf = await pdfjsLib.getDocument(docInit).promise;
+    const numPages = pdf.numPages;
+    await new Promise((r) => requestAnimationFrame(r));
+    const maxW = measureSheetScrollInnerMaxCssWidth();
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+    for (let p = 1; p <= numPages; p++) {
+      globalNumRef.n++;
+      const wrap = document.createElement('div');
+      wrap.className = 'recorder-sheet-page';
+      wrap.dataset.page = String(globalNumRef.n);
+      const badge = document.createElement('div');
+      badge.className = 'recorder-sheet-page-badge';
+      badge.textContent = `第 ${globalNumRef.n} 页`;
+      wrap.appendChild(badge);
+      const canvas = document.createElement('canvas');
+      canvas.style.display = 'block';
+      canvas.style.width = '100%';
+      canvas.style.height = 'auto';
+      wrap.appendChild(canvas);
+      frag.appendChild(wrap);
+
+      const page = await pdf.getPage(p);
+      const v1 = page.getViewport({ scale: 1 });
+      const cssScale = Math.min(maxW / v1.width, 2.5);
+      const viewportCss = page.getViewport({ scale: cssScale });
+      const renderViewport = page.getViewport({ scale: cssScale * dpr });
+      canvas.width = Math.max(1, renderViewport.width);
+      canvas.height = Math.max(1, renderViewport.height);
+      const cssW = Math.round(viewportCss.width) || 1;
+      canvas.style.maxWidth = `${cssW}px`;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+      await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
+    }
+    await pdf.destroy();
+  }
+
+  async function renderMergedSheets(items) {
     sheetPageCount = 0;
     if (!sheetScrollEl) return;
 
-    const hasSong = Boolean(songSelectEl && songSelectEl.value);
-    if (!hasSong) {
-      setSheetNoSongPlaceholder();
-      updateSheetTitle(0, 0);
-      return;
-    }
-
-    if (!sheets || sheets.length === 0) {
-      sheetScrollEl.innerHTML = '<div class="recorder-sheet-empty">此歌曲暂无歌谱</div>';
+    if (!items.length) {
+      if (songSelectEl && songSelectEl.value) {
+        sheetScrollEl.innerHTML = '<div class="recorder-sheet-empty">此歌曲暂无歌谱</div>';
+      } else {
+        setSheetNoSongPlaceholder();
+      }
       updateSheetTitle(0, 0);
       return;
     }
 
     sheetScrollEl.innerHTML = '<div class="recorder-sheet-empty">正在加载歌谱…</div>';
 
-    const sorted = [...sheets].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
-    let globalNum = 0;
+    const globalNumRef = { n: 0 };
     const frag = document.createDocumentFragment();
 
     try {
-      for (const s of sorted) {
-        if (isPdfSheet(s)) {
-          try {
-            const pdfjsLib = await loadPdfJs();
-            const pdf = await pdfjsLib.getDocument({ url: s.url, withCredentials: false }).promise;
-            const numPages = pdf.numPages;
-            await new Promise((r) => requestAnimationFrame(r));
-            const maxW = measureSheetScrollInnerMaxCssWidth();
-            const dpr = Math.min(window.devicePixelRatio || 1, 3);
-
-            for (let p = 1; p <= numPages; p++) {
-              globalNum++;
+      for (const item of items) {
+        if (item.src === 'server') {
+          const s = item.sheet;
+          if (isPdfSheet(s)) {
+            try {
+              const pdfjsLib = await loadPdfJs();
+              await renderOnePdfSource(pdfjsLib, { url: s.url, withCredentials: false }, globalNumRef, frag);
+            } catch (err) {
+              console.warn('PDF 渲染失败:', err);
+              globalNumRef.n++;
               const wrap = document.createElement('div');
               wrap.className = 'recorder-sheet-page';
-              wrap.dataset.page = String(globalNum);
+              wrap.dataset.page = String(globalNumRef.n);
               const badge = document.createElement('div');
               badge.className = 'recorder-sheet-page-badge';
-              badge.textContent = `第 ${globalNum} 页`;
+              badge.textContent = `第 ${globalNumRef.n} 页`;
+              const msg = document.createElement('div');
+              msg.className = 'recorder-sheet-empty';
+              msg.style.margin = '12px';
+              msg.textContent = '无法在此显示 PDF，请在新窗口打开。';
+              const a = document.createElement('a');
+              a.href = s.url;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.textContent = '打开 PDF';
+              a.style.cssText =
+                'margin:0 12px 12px;display:inline-block;color:var(--primary);text-decoration:underline;font-size:13px';
               wrap.appendChild(badge);
-              const canvas = document.createElement('canvas');
-              canvas.style.display = 'block';
-              canvas.style.width = '100%';
-              canvas.style.height = 'auto';
-              wrap.appendChild(canvas);
+              wrap.appendChild(msg);
+              wrap.appendChild(a);
               frag.appendChild(wrap);
-
-              const page = await pdf.getPage(p);
-              const v1 = page.getViewport({ scale: 1 });
-              const cssScale = Math.min(maxW / v1.width, 2.5);
-              const viewportCss = page.getViewport({ scale: cssScale });
-              const renderViewport = page.getViewport({ scale: cssScale * dpr });
-              canvas.width = Math.max(1, renderViewport.width);
-              canvas.height = Math.max(1, renderViewport.height);
-              const cssW = Math.round(viewportCss.width) || 1;
-              canvas.style.maxWidth = `${cssW}px`;
-              const ctx = canvas.getContext('2d');
-              if (!ctx) continue;
-              await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
             }
-            await pdf.destroy();
-          } catch (err) {
-            console.warn('PDF 渲染失败:', err);
-            globalNum++;
+          } else {
+            globalNumRef.n++;
             const wrap = document.createElement('div');
             wrap.className = 'recorder-sheet-page';
-            wrap.dataset.page = String(globalNum);
+            wrap.dataset.page = String(globalNumRef.n);
             const badge = document.createElement('div');
             badge.className = 'recorder-sheet-page-badge';
-            badge.textContent = `第 ${globalNum} 页`;
-            const msg = document.createElement('div');
-            msg.className = 'recorder-sheet-empty';
-            msg.style.margin = '12px';
-            msg.textContent = '无法在此显示 PDF，请在新窗口打开。';
-            const a = document.createElement('a');
-            a.href = s.url;
-            a.target = '_blank';
-            a.rel = 'noopener noreferrer';
-            a.textContent = '打开 PDF';
-            a.style.cssText = 'margin:0 12px 12px;display:inline-block;color:var(--primary);text-decoration:underline;font-size:13px';
+            badge.textContent = `第 ${globalNumRef.n} 页`;
             wrap.appendChild(badge);
-            wrap.appendChild(msg);
-            wrap.appendChild(a);
+            const img = document.createElement('img');
+            img.src = s.url;
+            img.alt = `歌谱第 ${globalNumRef.n} 页`;
+            img.loading = 'lazy';
+            wrap.appendChild(img);
             frag.appendChild(wrap);
           }
         } else {
-          globalNum++;
-          const wrap = document.createElement('div');
-          wrap.className = 'recorder-sheet-page';
-          wrap.dataset.page = String(globalNum);
-          const badge = document.createElement('div');
-          badge.className = 'recorder-sheet-page-badge';
-          badge.textContent = `第 ${globalNum} 页`;
-          wrap.appendChild(badge);
-          const img = document.createElement('img');
-          img.src = s.url;
-          img.alt = `歌谱第 ${globalNum} 页`;
-          img.loading = 'lazy';
-          wrap.appendChild(img);
-          frag.appendChild(wrap);
+          const e = item.entry;
+          if (e.kind === 'pdf') {
+            try {
+              const pdfjsLib = await loadPdfJs();
+              const buf = await e.file.arrayBuffer();
+              await renderOnePdfSource(pdfjsLib, { data: buf }, globalNumRef, frag);
+            } catch (err) {
+              console.warn('本地 PDF 渲染失败:', err);
+              globalNumRef.n++;
+              const wrap = document.createElement('div');
+              wrap.className = 'recorder-sheet-page';
+              wrap.dataset.page = String(globalNumRef.n);
+              const badge = document.createElement('div');
+              badge.className = 'recorder-sheet-page-badge';
+              badge.textContent = `第 ${globalNumRef.n} 页`;
+              const msg = document.createElement('div');
+              msg.className = 'recorder-sheet-empty';
+              msg.style.margin = '12px';
+              msg.textContent = '无法渲染此本地 PDF，请尝试转换为图片。';
+              wrap.appendChild(badge);
+              wrap.appendChild(msg);
+              frag.appendChild(wrap);
+            }
+          } else {
+            globalNumRef.n++;
+            const wrap = document.createElement('div');
+            wrap.className = 'recorder-sheet-page';
+            wrap.dataset.page = String(globalNumRef.n);
+            const badge = document.createElement('div');
+            badge.className = 'recorder-sheet-page-badge';
+            badge.textContent = `第 ${globalNumRef.n} 页 · 本地`;
+            wrap.appendChild(badge);
+            const img = document.createElement('img');
+            img.src = e.blobUrl;
+            img.alt = `本地歌谱第 ${globalNumRef.n} 页`;
+            img.loading = 'lazy';
+            wrap.appendChild(img);
+            frag.appendChild(wrap);
+          }
         }
       }
 
       sheetScrollEl.innerHTML = '';
       sheetScrollEl.appendChild(frag);
-      sheetPageCount = globalNum;
+      sheetPageCount = globalNumRef.n;
       sheetScrollEl.scrollTop = 0;
       updateSheetTitle(sheetPageCount ? 1 : 0, sheetPageCount);
       requestAnimationFrame(updateCurrentSheetPageFromScroll);
@@ -955,22 +1204,31 @@
       songSelectEl.disabled = recordingState === 'recording';
       syncPicksToMobile();
       updateMobileAccButtonsState();
-      if (!songSelectEl.value) void renderSheetPages([]);
+      void refreshSheets();
     }
   }
 
   async function onSongSelected(songId) {
+    suspendBgOutputOnly();
     currentSongDetail = null;
     if (audioTrackSelectEl) {
       audioTrackSelectEl.innerHTML = '';
       audioTrackSelectEl.appendChild(new Option('请先选择歌曲', '', true, true));
       audioTrackSelectEl.disabled = true;
     }
-    setBgMusicFromUrl(null, '');
     if (bgHintEl) bgHintEl.hidden = false;
     bgMetaEl.hidden = true;
     if (!songId) {
-      void renderSheetPages([]);
+      buildAudioTrackSelectOptions();
+      const firstOpt = audioTrackSelectEl?.options[0];
+      if (firstOpt && firstOpt.value) {
+        audioTrackSelectEl.value = firstOpt.value;
+        applyAudioTrackValue(firstOpt.value);
+      } else {
+        setBgMusicFromUrl(null, '');
+      }
+      syncBgMetaVisibility();
+      void refreshSheets();
       syncPicksToMobile();
       updateMobileAccButtonsState();
       return;
@@ -999,7 +1257,7 @@
       }
       syncPicksToMobile();
       updateMobileAccButtonsState();
-      await renderSheetPages(currentSongDetail.resources?.sheets || []);
+      await refreshSheets();
     } catch (e) {
       if (typeof window.toast === 'function') window.toast(e.message || String(e), 'error');
       if (audioTrackSelectEl) {
@@ -1008,6 +1266,7 @@
         audioTrackSelectEl.disabled = true;
       }
       syncPicksToMobile();
+      void refreshSheets();
     }
     updateMobileAccButtonsState();
   }
@@ -1048,16 +1307,17 @@
 
   function updateMobileAccButtonsState() {
     if (openSongModalBtn) openSongModalBtn.disabled = recordingState === 'recording';
+    if (localBgBtn) localBgBtn.disabled = recordingState === 'recording';
+    if (modalLocalSheetsBtn) modalLocalSheetsBtn.disabled = recordingState === 'recording';
+    if (modalLocalBgBtn) modalLocalBgBtn.disabled = recordingState === 'recording';
+    if (modalClearLocalSheetsBtn) modalClearLocalSheetsBtn.disabled = recordingState === 'recording';
     if (audioTrackSelectModal) {
       const hasPlayableTrack =
         audioTrackSelectEl &&
         [...audioTrackSelectEl.options].some((o) => o.value && !o.disabled);
-      audioTrackSelectModal.disabled =
-        recordingState === 'recording' ||
-        !songSelectEl ||
-        !songSelectEl.value ||
-        !hasPlayableTrack;
+      audioTrackSelectModal.disabled = recordingState === 'recording' || !hasPlayableTrack;
     }
+    syncSongPickButtonsVisibility();
   }
 
   function closePickModal() {
@@ -1079,22 +1339,19 @@
   function clearBgMusic() {
     if (recordingState === 'recording') return;
     setBgMusicFromUrl(null, '');
-    if (currentSongDetail) {
-      buildAudioTrackSelectOptions();
+    buildAudioTrackSelectOptions();
+    if (
+      currentSongDetail &&
+      audioTrackSelectEl &&
+      [...audioTrackSelectEl.options].some((o) => o.value && !o.disabled)
+    ) {
       const ph = document.createElement('option');
       ph.value = '';
       ph.textContent = '请选择参考音频';
       ph.selected = true;
-      if (audioTrackSelectEl && audioTrackSelectEl.firstChild) {
-        audioTrackSelectEl.insertBefore(ph, audioTrackSelectEl.firstChild);
-      } else if (audioTrackSelectEl) {
-        audioTrackSelectEl.appendChild(ph);
-      }
-      syncPicksToMobile();
-    } else if (audioTrackSelectEl) {
-      audioTrackSelectEl.value = '';
-      syncPicksToMobile();
+      audioTrackSelectEl.insertBefore(ph, audioTrackSelectEl.firstChild);
     }
+    syncPicksToMobile();
     syncBgMetaVisibility();
     updateMobileAccButtonsState();
   }
@@ -1145,7 +1402,9 @@
         const bgAudio = new Audio();
         bgAudio.src = bgMusicUrl;
         bgAudio.loop = true;
-        bgAudio.crossOrigin = 'anonymous';
+        if (bgMusicUrl && !String(bgMusicUrl).startsWith('blob:')) {
+          bgAudio.crossOrigin = 'anonymous';
+        }
         bgAudioElement = bgAudio;
 
         const onBgLoadedMetadata = () => {
@@ -1343,8 +1602,7 @@
     if (audioTrackSelectEl) {
       audioTrackSelectEl.disabled =
         recordingState === 'recording' ||
-        !songSelectEl.value ||
-        [...audioTrackSelectEl.options].every((o) => !o.value);
+        [...audioTrackSelectEl.options].every((o) => !o.value || o.disabled);
     }
     syncPicksToMobile();
     if (clearBgBtn) clearBgBtn.disabled = !bgMusicUrl;
@@ -1411,8 +1669,7 @@
     if (audioTrackSelectEl) {
       audioTrackSelectEl.disabled =
         recordingState === 'recording' ||
-        !songSelectEl.value ||
-        [...audioTrackSelectEl.options].every((o) => !o.value);
+        [...audioTrackSelectEl.options].every((o) => !o.value || o.disabled);
     }
     syncPicksToMobile();
     if (clearBgBtn) clearBgBtn.disabled = !bgMusicUrl;
@@ -1594,7 +1851,7 @@
     if (sheetScrollEl) {
       sheetScrollEl.addEventListener('click', (e) => {
         if (recordingState === 'recording') return;
-        if (e.target.closest('[data-recorder-open-pick]')) openPickModal();
+        if (e.target.closest('#recorder-sheet-first-pick-btn')) openPickModal();
       });
     }
     if (pickModalDoneBtn) {
@@ -1603,6 +1860,44 @@
     if (pickModalBackdrop) {
       pickModalBackdrop.addEventListener('click', () => closePickModal());
     }
+
+    if (localSheetsInput) {
+      localSheetsInput.addEventListener('change', () => {
+        if (localSheetsInput.files?.length) ingestLocalSheetFiles(localSheetsInput.files);
+        localSheetsInput.value = '';
+      });
+    }
+    if (modalClearLocalSheetsBtn) {
+      modalClearLocalSheetsBtn.addEventListener('click', () => clearLocalSheets());
+    }
+    if (modalLocalSheetsBtn && localSheetsInput) {
+      modalLocalSheetsBtn.addEventListener('click', () => {
+        if (recordingState === 'recording') return;
+        localSheetsInput.click();
+      });
+    }
+
+    if (localBgBtn && localBgInput) {
+      localBgBtn.addEventListener('click', () => {
+        if (recordingState === 'recording') return;
+        localBgInput.click();
+      });
+    }
+    if (localBgInput) {
+      localBgInput.addEventListener('change', () => {
+        const f = localBgInput.files?.[0];
+        if (f) setLocalAccompanimentFile(f);
+        localBgInput.value = '';
+      });
+    }
+    if (modalLocalBgBtn && localBgInput) {
+      modalLocalBgBtn.addEventListener('click', () => {
+        if (recordingState === 'recording') return;
+        localBgInput.click();
+      });
+    }
+
+    initRecorderDragDrop();
 
     if (clearBgBtn) clearBgBtn.addEventListener('click', clearBgMusic);
 
@@ -1687,7 +1982,14 @@
     pickModalDoneBtn = document.getElementById('recorder-pick-modal-done');
     modalSongBlock = document.getElementById('recorder-modal-song-block');
     openSongModalBtn = document.getElementById('recorder-open-song-modal');
+    localSheetsInput = document.getElementById('recorder-local-sheets-input');
+    localBgBtn = document.getElementById('recorder-local-bg-btn');
+    localBgInput = document.getElementById('recorder-local-bg-input');
+    modalLocalSheetsBtn = document.getElementById('recorder-modal-local-sheets-btn');
+    modalLocalBgBtn = document.getElementById('recorder-modal-local-bg-btn');
+    modalClearLocalSheetsBtn = document.getElementById('recorder-modal-clear-local-sheets-btn');
     sheetScrollEl = document.getElementById('recorder-sheet-scroll');
+    wavesEl = document.getElementById('recorder-waves');
     sheetTitleEl = document.getElementById('recorder-sheet-title');
     bgHintEl = document.getElementById('recorder-bg-hint');
     bgMetaEl = document.getElementById('recorder-bg-meta');
@@ -1729,7 +2031,8 @@
     updateMobileAccButtonsState();
     setPlayButtonUi(false);
     bind();
-    void renderSheetPages([]);
+    updateClearLocalSheetsBtn();
+    void refreshSheets();
 
     const obs = new MutationObserver(() => {
       if (!rootEl.classList.contains('hidden')) resizeCanvasToLayout();

@@ -13,13 +13,15 @@
       <aside class="recorder-sheets" aria-label="歌谱">
         <div class="recorder-sheets-head">
           <span id="recorder-sheet-title" class="recorder-sheets-title">歌谱</span>
-          <button type="button" class="recorder-mobile-text-btn recorder-sheets-pick-song-btn" id="recorder-open-song-modal">选择歌曲</button>
+          <div class="recorder-sheets-head-actions">
+            <button type="button" class="recorder-mobile-text-btn recorder-sheets-pick-song-btn hidden" id="recorder-open-song-modal">选择歌曲</button>
+          </div>
         </div>
         <div id="recorder-sheet-scroll" class="recorder-sheet-scroll">
           <div class="recorder-sheet-no-song">
-            <p class="recorder-sheet-no-song-text">请选择练唱歌曲，加载后将在此显示歌谱</p>
-            <button type="button" class="btn btn-primary recorder-sheet-pick-large" data-recorder-open-pick>选择歌曲</button>
-            <p class="recorder-sheet-no-song-hint-desktop">在右侧「练唱歌曲」中选择歌曲</p>
+            <p class="recorder-sheet-no-song-text">请在右侧选择练唱歌曲；也可将图片或 PDF 拖入此区域作为本地歌谱</p>
+            <button type="button" class="btn btn-primary recorder-sheet-pick-large recorder-mobile-only" id="recorder-sheet-first-pick-btn">选择练唱歌曲</button>
+            <p class="recorder-sheet-no-song-hint-desktop">在右侧「练唱歌曲」中选择歌曲；支持将歌谱文件拖入左侧区域</p>
           </div>
         </div>
       </aside>
@@ -33,7 +35,7 @@
           </label>
         </div>
 
-        <div class="recorder-waves">
+        <div id="recorder-waves" class="recorder-waves">
           <button type="button" class="btn btn-text btn-sm recorder-clear-bg-fab hidden" id="recorder-clear-bg-btn" disabled>清除参考音频</button>
           <div class="recorder-wave recorder-wave-mic">
             <span class="recorder-wave-label">麦克风</span>
@@ -77,8 +79,15 @@
                   <option value="">请先选择歌曲</option>
                 </select>
               </div>
+              <div class="recorder-pick-row recorder-local-row">
+                <span class="form-label">本地素材</span>
+                <div class="recorder-local-row-btns">
+                  <button type="button" class="btn btn-outline btn-sm" id="recorder-local-bg-btn">本地伴奏</button>
+                </div>
+                <input type="file" id="recorder-local-bg-input" class="hidden" accept="audio/*" />
+              </div>
               <p id="recorder-bg-hint" class="recorder-bg-hint hint" style="margin-bottom:0">
-                选择歌曲后可选伴奏或四声部范唱作为参考音频。
+                选择歌曲后可选云端伴奏或范唱；也可将音频拖入上方波形区，或使用「本地伴奏」选取文件。
               </p>
             </div>
           </div>
@@ -163,9 +172,19 @@
             <option value="">请先选择歌曲</option>
           </select>
         </div>
+        <div class="recorder-modal-block">
+          <span class="form-label">本地素材</span>
+          <div class="recorder-modal-local-btns">
+            <button type="button" class="btn btn-outline btn-sm" id="recorder-modal-local-sheets-btn">本地歌谱</button>
+            <button type="button" class="btn btn-outline btn-sm hidden" id="recorder-modal-clear-local-sheets-btn">清除本地歌谱</button>
+            <button type="button" class="btn btn-outline btn-sm" id="recorder-modal-local-bg-btn">本地伴奏</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
+
+  <input type="file" id="recorder-local-sheets-input" class="hidden" multiple accept="image/*,.pdf,application/pdf" />
 </div>
 
 <script is:inline src="/legacy/recorder.js"></script>
