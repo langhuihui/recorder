@@ -1,3 +1,7 @@
+var HISTORY_KEY = 'recentRecordings'
+var SHARE_SUFFIX_KEY = 'lastShareSuffix'
+var MAX_HISTORY = 10
+
 Page({
   data: {
     statusBarHeight: 20,
@@ -7,12 +11,26 @@ Page({
     isPlaying: false,
     bgMusicLoaded: false,
     bgMusicFileName: '',
+    bgMusicPath: '',
+    removedBg: null,
     bgDuration: 0,
     bgCurrentTime: 0,
     bgVolume: 50,
     bgProgressPercent: 0,
+    bgSkipStart: 0,
+    bgSkipMax: 60,
+    shareModalVisible: false,
+    shareFileName: '',
+    sharePrefix: '',
+    shareFilePath: '',
+    skipModalVisible: false,
+    skipPresets: [0, 3, 5, 10, 15, 30, 60],
     recordingFilePath: '',
-    scoreFiles: []
+    scoreFiles: [],
+    removedScores: [],
+    recentRecordings: [],
+    recentModalVisible: false,
+    maxHistory: MAX_HISTORY
   },
 
   recorderManager: null,
@@ -27,6 +45,7 @@ Page({
     var sysInfo = wx.getSystemInfoSync()
     this.setData({ statusBarHeight: sysInfo.statusBarHeight })
 
+    this._loadRecordings()
     this.recorderManager = wx.getRecorderManager()
 
     var self = this
@@ -41,7 +60,7 @@ Page({
       self.startDurationTimer()
 
       if (self.bgAudioCtx) {
-        self.bgAudioCtx.seek(0)
+        self.bgAudioCtx.seek(self.data.bgSkipStart || 0)
         self.bgAudioCtx.play()
       }
     })
@@ -49,9 +68,9 @@ Page({
     this.recorderManager.onStop(function (res) {
       self.stopDurationTimer()
 
+      // 只暂停，保留伴奏进度；重置交给「重录」
       if (self.bgAudioCtx) {
         self.bgAudioCtx.pause()
-        self.bgAudioCtx.seek(0)
       }
 
       var recordedDuration = self.data.duration
@@ -64,12 +83,11 @@ Page({
         recordingFilePath: res.tempFilePath,
         duration: recordedDuration,
         currentTime: 0,
-        isPlaying: false,
-        bgCurrentTime: 0,
-        bgProgressPercent: 0
+        isPlaying: false
       })
 
       self.initPlaybackAudio(res.tempFilePath)
+      self._archiveRecording(res.tempFilePath, recordedDuration)
     })
 
     this.recorderManager.onError(function (err) {
@@ -120,7 +138,7 @@ Page({
 
     this.recorderManager.start({
       duration: 600000,
-      format: 'aac',
+      format: 'mp3',
       sampleRate: 44100,
       numberOfChannels: 1,
       encodeBitRate: 192000
@@ -140,18 +158,30 @@ Page({
       this.playAudioCtx = null
     }
 
-    if (this.data.recordingFilePath) {
-      try {
-        wx.getFileSystemManager().unlinkSync(this.data.recordingFilePath)
-      } catch (e) {}
-    }
-
+    // 不删文件：录音可能已经在「最近录音」列表里，删了就找不回来
     this.setData({
       recordingState: 'idle',
       duration: 0,
       currentTime: 0,
       isPlaying: false,
       recordingFilePath: ''
+    })
+
+    this._resetBgProgress()
+  },
+
+  _resetBgProgress: function () {
+    var start = this.data.bgSkipStart || 0
+
+    if (this.bgAudioCtx) {
+      try { this.bgAudioCtx.pause() } catch (e) {}
+      try { this.bgAudioCtx.seek(start) } catch (e) {}
+    }
+
+    var total = this.data.bgDuration
+    this.setData({
+      bgCurrentTime: start,
+      bgProgressPercent: (isFinite(total) && total > 0) ? Math.min(100, (start / total) * 100) : 0
     })
   },
 
@@ -187,6 +217,7 @@ Page({
       var dur = bgAudio.duration
       if (isFinite(dur) && dur > 0) {
         self.setData({ bgDuration: dur })
+        self._updateSkipMax()
       }
     })
 
@@ -195,15 +226,12 @@ Page({
       var d = bgAudio.duration
       if (!isFinite(t) || t < 0) return
 
-      if (isFinite(d) && d > 0) {
-        self.setData({
-          bgCurrentTime: t,
-          bgDuration: d,
-          bgProgressPercent: (t / d) * 100
-        })
-      } else {
-        self.setData({ bgCurrentTime: t })
+      if (isFinite(d) && d > 0 && d !== self.data.bgDuration) {
+        self.setData({ bgDuration: d })
+        self._updateSkipMax()
       }
+
+      self._applyBgProgress(t)
     })
 
     bgAudio.onEnded(function () {
@@ -225,9 +253,13 @@ Page({
     self.setData({
       bgMusicLoaded: true,
       bgMusicFileName: fileName,
+      bgMusicPath: filePath,
+      removedBg: null,
       bgDuration: 0,
       bgCurrentTime: 0,
-      bgProgressPercent: 0
+      bgProgressPercent: 0,
+      bgSkipStart: 0,
+      bgSkipMax: 60
     })
   },
 
@@ -241,11 +273,304 @@ Page({
     }
 
     this.setData({
+      removedBg: this.data.bgMusicPath ? {
+        path: this.data.bgMusicPath,
+        fileName: this.data.bgMusicFileName,
+        skipStart: this.data.bgSkipStart
+      } : null,
       bgMusicLoaded: false,
       bgMusicFileName: '',
+      bgMusicPath: '',
       bgDuration: 0,
       bgCurrentTime: 0,
-      bgProgressPercent: 0
+      bgProgressPercent: 0,
+      bgSkipStart: 0,
+      bgSkipMax: 60
+    })
+  },
+
+  restoreBgMusic: function () {
+    if (this.data.recordingState === 'recording') return
+
+    var removed = this.data.removedBg
+    if (!removed) return
+
+    var skip = removed.skipStart || 0
+    this._loadBgMusic(removed.path, removed.fileName)
+    this.setData({ bgSkipStart: skip })
+  },
+
+  openHistoryModal: function () {
+    if (this.data.recordingState === 'recording') return
+    this.setData({ recentModalVisible: true })
+  },
+
+  closeHistoryModal: function () {
+    this.setData({ recentModalVisible: false })
+  },
+
+  loadRecording: function (e) {
+    var item = this.data.recentRecordings[Number(e.currentTarget.dataset.index)]
+    if (!item) return
+
+    this.stopPlaybackProgressLoop()
+    if (this.playAudioCtx) {
+      try { this.playAudioCtx.stop() } catch (err) {}
+      try { this.playAudioCtx.destroy() } catch (err) {}
+      this.playAudioCtx = null
+    }
+
+    this.setData({
+      recordingState: 'stopped',
+      recordingFilePath: item.path,
+      duration: item.duration || 0,
+      currentTime: 0,
+      isPlaying: false,
+      recentModalVisible: false
+    })
+
+    this.initPlaybackAudio(item.path)
+  },
+
+  deleteRecording: function (e) {
+    var index = Number(e.currentTarget.dataset.index)
+    var item = this.data.recentRecordings[index]
+    if (!item) return
+
+    var self = this
+    wx.showModal({
+      title: '删除这条录音',
+      content: (item.bgName ? item.bgName + ' · ' : '') + item.timeLabel
+        + '（' + Number(item.duration || 0).toFixed(0) + ' 秒）将被删除',
+      success: function (res) {
+        if (!res.confirm) return
+
+        var list = self.data.recentRecordings.slice()
+        list.splice(index, 1)
+        try { wx.getFileSystemManager().unlinkSync(item.path) } catch (err) {}
+
+        var patch = { recentRecordings: list }
+        if (!list.length) patch.recentModalVisible = false
+        if (self.data.recordingFilePath === item.path) {
+          if (self.playAudioCtx) {
+            self.stopPlaybackProgressLoop()
+            try { self.playAudioCtx.stop() } catch (err2) {}
+            try { self.playAudioCtx.destroy() } catch (err2) {}
+            self.playAudioCtx = null
+          }
+          patch.recordingState = 'idle'
+          patch.recordingFilePath = ''
+          patch.duration = 0
+          patch.currentTime = 0
+          patch.isPlaying = false
+        }
+
+        self.setData(patch)
+        self._persistRecordings()
+      }
+    })
+  },
+
+  clearAllRecordings: function () {
+    if (this.data.recordingState === 'recording') return
+
+    var list = this.data.recentRecordings || []
+    if (!list.length) return
+
+    var self = this
+    wx.showModal({
+      title: '清空最近录音',
+      content: '共 ' + list.length + ' 条录音将被删除，无法恢复',
+      confirmText: '清空',
+      confirmColor: '#f87171',
+      success: function (res) {
+        if (!res.confirm) return
+
+        var fs = wx.getFileSystemManager()
+        var currentDeleted = false
+        for (var i = 0; i < list.length; i++) {
+          try { fs.unlinkSync(list[i].path) } catch (e) {}
+          if (list[i].path === self.data.recordingFilePath) currentDeleted = true
+        }
+
+        var patch = { recentRecordings: [], recentModalVisible: false }
+
+        // 当前载入的那条也被删了，回到待录制状态
+        if (currentDeleted) {
+          if (self.playAudioCtx) {
+            self.stopPlaybackProgressLoop()
+            try { self.playAudioCtx.stop() } catch (e) {}
+            try { self.playAudioCtx.destroy() } catch (e) {}
+            self.playAudioCtx = null
+          }
+          patch.recordingState = 'idle'
+          patch.recordingFilePath = ''
+          patch.duration = 0
+          patch.currentTime = 0
+          patch.isPlaying = false
+        }
+
+        self.setData(patch)
+        self._persistRecordings()
+        wx.showToast({ title: '已清空', icon: 'success' })
+      }
+    })
+  },
+
+  _loadRecordings: function () {
+    var list = []
+    try {
+      list = wx.getStorageSync(HISTORY_KEY) || []
+    } catch (e) {}
+    if (Object.prototype.toString.call(list) !== '[object Array]') list = []
+
+    var fs = wx.getFileSystemManager()
+    var valid = []
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i]
+      if (!item || !item.path) continue
+      if (typeof fs.accessSync === 'function') {
+        try { fs.accessSync(item.path) } catch (e) { continue }
+      }
+      valid.push(item)
+    }
+
+    this.setData({ recentRecordings: valid })
+    if (valid.length !== list.length) this._persistRecordings()
+  },
+
+  _persistRecordings: function () {
+    try { wx.setStorageSync(HISTORY_KEY, this.data.recentRecordings) } catch (e) {}
+  },
+
+  _archiveRecording: function (tempPath, duration) {
+    if (!tempPath) return
+
+    var fs = wx.getFileSystemManager()
+    var dir = wx.env.USER_DATA_PATH + '/recordings'
+    try { fs.mkdirSync(dir, true) } catch (e) {}
+
+    var name = this._recordingFileName()
+    var savedPath = dir + '/' + name
+
+    try {
+      fs.saveFileSync(tempPath, savedPath)
+    } catch (e) {
+      console.error('录音归档失败:', e)
+      return
+    }
+
+    var list = this.data.recentRecordings.slice()
+    list.unshift({
+      path: savedPath,
+      name: name,
+      bgName: this._bgName(),
+      duration: duration || 0,
+      createdAt: Date.now(),
+      timeLabel: this._getTimeLabel()
+    })
+
+    while (list.length > MAX_HISTORY) {
+      var dropped = list.pop()
+      if (dropped && dropped.path) {
+        try { fs.unlinkSync(dropped.path) } catch (e) {}
+      }
+    }
+
+    var patch = { recentRecordings: list }
+    // 让刚录完的这条在列表里高亮为「当前」
+    if (this.data.recordingFilePath === tempPath) patch.recordingFilePath = savedPath
+
+    this.setData(patch)
+    this._persistRecordings()
+  },
+
+  _bgName: function () {
+    if (!this.data.bgMusicFileName) return ''
+    var bg = String(this.data.bgMusicFileName)
+      .replace(/\.[^.]+$/, '')
+      .replace(/[\/\\:*?"<>|\r\n\t]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (bg.length > 24) bg = bg.slice(0, 24)
+    return bg
+  },
+
+  _recordingFileName: function () {
+    var bg = this._bgName()
+    return (bg ? bg + '_' : '') + '录音_' + this._getTimestamp() + '.mp3'
+  },
+
+  _getTimeLabel: function () {
+    var d = new Date()
+    var pad = function (n) { return (n < 10 ? '0' : '') + n }
+    return pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+      + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+  },
+
+  openSkipModal: function () {
+    if (this.data.recordingState === 'recording') return
+    this.setData({ skipModalVisible: true })
+  },
+
+  closeSkipModal: function () {
+    this.setData({ skipModalVisible: false })
+  },
+
+  noop: function () {},
+
+  onSkipStartChanging: function (e) {
+    var val = Number(e.detail.value)
+    if (!isFinite(val) || val < 0) val = 0
+    this.setData({ bgSkipStart: Math.round(val * 2) / 2 })
+  },
+
+  onSkipStartChange: function (e) {
+    if (this.data.recordingState === 'recording') return
+
+    var val = Number(e.detail.value)
+    if (!isFinite(val) || val < 0) val = 0
+    this._commitSkip(Math.round(val * 2) / 2)
+  },
+
+  onSkipPresetTap: function (e) {
+    if (this.data.recordingState === 'recording') return
+
+    var val = Number(e.currentTarget.dataset.value)
+    if (!isFinite(val) || val < 0) val = 0
+    this._commitSkip(Math.min(val, this.data.bgSkipMax))
+  },
+
+  _commitSkip: function (val) {
+    this.setData({ bgSkipStart: val })
+
+    if (this.bgAudioCtx && this.data.bgDuration > 0) {
+      try { this.bgAudioCtx.seek(val) } catch (err) {}
+    }
+    this._applyBgProgress(val)
+  },
+
+  _updateSkipMax: function () {
+    var d = this.data.bgDuration
+    var max = 60
+    if (isFinite(d) && d > 1) {
+      max = Math.floor(d) - 1
+    }
+    if (max < 5) max = 5
+
+    this.setData({
+      bgSkipMax: max,
+      bgSkipStart: Math.min(this.data.bgSkipStart, max)
+    })
+  },
+
+  // 进度按完整时长计算：跳过多少，进度条起点就前进多少
+  _applyBgProgress: function (t) {
+    var total = this.data.bgDuration
+
+    this.setData({
+      bgCurrentTime: t,
+      bgProgressPercent: (isFinite(total) && total > 0) ? Math.min(100, (t / total) * 100) : 0
     })
   },
 
@@ -261,6 +586,43 @@ Page({
 
   chooseScoreFile: function () {
     var self = this
+    wx.showActionSheet({
+      itemList: ['从手机相册选择', '从微信聊天选择'],
+      success: function (res) {
+        if (res.tapIndex === 0) {
+          self._chooseScoreFromAlbum()
+        } else if (res.tapIndex === 1) {
+          self._chooseScoreFromChat()
+        }
+      },
+      fail: function () {}
+    })
+  },
+
+  _chooseScoreFromAlbum: function () {
+    var self = this
+    wx.chooseMedia({
+      count: 9,
+      mediaType: ['image'],
+      sourceType: ['album'],
+      sizeType: ['original'],
+      success: function (res) {
+        var files = (res.tempFiles || []).map(function (file, index) {
+          return {
+            path: file.tempFilePath,
+            name: '相册歌谱' + (index + 1)
+          }
+        })
+
+        if (files.length) {
+          self.setData({ scoreFiles: files, removedScores: [] })
+        }
+      }
+    })
+  },
+
+  _chooseScoreFromChat: function () {
+    var self = this
     wx.chooseMessageFile({
       count: 9,
       type: 'image',
@@ -272,16 +634,27 @@ Page({
           }
         })
 
-        self.setData({
-          scoreFiles: files
-        })
+        if (files.length) {
+          self.setData({ scoreFiles: files, removedScores: [] })
+        }
       }
     })
   },
 
   removeScoreFile: function () {
     this.setData({
+      removedScores: this.data.scoreFiles,
       scoreFiles: []
+    })
+  },
+
+  restoreScoreFile: function () {
+    if (this.data.recordingState === 'recording') return
+    if (!this.data.removedScores.length) return
+
+    this.setData({
+      scoreFiles: this.data.removedScores,
+      removedScores: []
     })
   },
 
@@ -404,14 +777,126 @@ Page({
   },
 
   saveRecording: function () {
-    var filePath = this.data.recordingFilePath
-    if (!filePath) {
+    if (!this.data.recordingFilePath) {
+      wx.showToast({ title: '没有录音文件', icon: 'none' })
+      return
+    }
+    this._saveFile(this.data.recordingFilePath)
+  },
+
+  openShareModal: function () {
+    if (!this.data.recordingFilePath) {
       wx.showToast({ title: '没有录音文件', icon: 'none' })
       return
     }
 
+    this.setData({
+      shareFilePath: this.data.recordingFilePath,
+      sharePrefix: this._bgName(),
+      shareFileName: this._lastShareSuffix(),
+      shareModalVisible: true
+    })
+  },
+
+  shareRecordingItem: function (e) {
+    var item = this.data.recentRecordings[Number(e.currentTarget.dataset.index)]
+    if (!item) return
+
+    this.setData({
+      shareFilePath: item.path,
+      sharePrefix: item.bgName || this._bgName(),
+      shareFileName: this._lastShareSuffix(),
+      recentModalVisible: false,
+      shareModalVisible: true
+    })
+  },
+
+  closeShareModal: function () {
+    this.setData({ shareModalVisible: false })
+  },
+
+  onShareNameInput: function (e) {
+    this.setData({ shareFileName: e.detail.value })
+  },
+
+  resetShareName: function () {
+    this.setData({ shareFileName: this._lastShareSuffix() })
+  },
+
+  // 输入框里只放「伴奏名之后」的部分，直接带出上次编辑的内容
+  _lastShareSuffix: function () {
+    try { return wx.getStorageSync(SHARE_SUFFIX_KEY) || '' } catch (e) {}
+    return ''
+  },
+
+  confirmShare: function () {
+    var self = this
+    var prefix = this.data.sharePrefix || ''
+    var suffix = String(this.data.shareFileName || '')
+      .replace(/[\/\\:*?"<>|\r\n\t]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    var name
+    if (prefix) {
+      if (suffix.length > 40) suffix = suffix.slice(0, 40)
+      name = suffix ? prefix + '_' + suffix : prefix
+    } else {
+      if (!suffix) suffix = '录音_' + this._getTimestamp()
+      if (suffix.length > 60) suffix = suffix.slice(0, 60)
+      name = suffix
+    }
+
+    // 记住用户这次编辑的内容，下次弹窗自动带出
+    if (suffix) {
+      try { wx.setStorageSync(SHARE_SUFFIX_KEY, suffix) } catch (e) {}
+    }
+
+    name = name + '.mp3'
+
+    var sharePath = this.data.shareFilePath || this.data.recordingFilePath
+    if (!sharePath) {
+      wx.showToast({ title: '没有录音文件', icon: 'none' })
+      return
+    }
+
+    // 让「保存」也用同一个名字
+    var list = this.data.recentRecordings.slice()
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].path === sharePath) {
+        list[i].name = name
+        break
+      }
+    }
+
+    this.setData({ shareModalVisible: false, recentRecordings: list })
+    this._persistRecordings()
+
+    if (wx.shareFileMessage) {
+      wx.shareFileMessage({
+        filePath: sharePath,
+        fileName: name,
+        success: function () {},
+        fail: function () {
+          self._saveFile(sharePath)
+        }
+      })
+    } else {
+      self._saveFile(sharePath)
+    }
+  },
+
+  _saveFile: function (filePath) {
     var fs = wx.getFileSystemManager()
-    var savedPath = wx.env.USER_DATA_PATH + '/录音_' + this._getTimestamp() + '.aac'
+    var fileName = this._recordingFileName()
+    var list = this.data.recentRecordings || []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].path === filePath) {
+        fileName = list[i].name
+        break
+      }
+    }
+    var savedPath = wx.env.USER_DATA_PATH + '/' + fileName
 
     try {
       fs.saveFileSync(filePath, savedPath)
@@ -437,28 +922,6 @@ Page({
         })
       }
     })
-  },
-
-  shareRecording: function () {
-    var filePath = this.data.recordingFilePath
-    if (!filePath) {
-      wx.showToast({ title: '没有录音文件', icon: 'none' })
-      return
-    }
-
-    var self = this
-    if (wx.shareFileMessage) {
-      wx.shareFileMessage({
-        filePath: filePath,
-        fileName: '录音_' + self._getTimestamp() + '.aac',
-        success: function () {},
-        fail: function () {
-          self.saveRecording()
-        }
-      })
-    } else {
-      self.saveRecording()
-    }
   },
 
   startDurationTimer: function () {

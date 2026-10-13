@@ -19,13 +19,45 @@ page {
 .nav-content {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   height: 92rpx;
   padding: 0 8rpx;
+}
+
+.nav-history-btn {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  padding: 6rpx 16rpx;
+  border-radius: 999rpx;
+  background: rgba(167, 139, 250, 0.16);
+  border: 2rpx solid rgba(167, 139, 250, 0.4);
+  color: #c4b5fd;
+  font-size: 22rpx;
+}
+
+.nav-history-btn:active {
+  opacity: 0.7;
+}
+
+.nav-history-btn-disabled {
+  color: #71717a;
+  border-color: #2a2a3e;
+  background: rgba(15, 15, 26, 0.9);
+}
+
+/* 有歌谱时压缩导航栏，把纵向空间让给歌谱 */
+.nav-content-slim {
+  height: 64rpx;
+}
+
+.nav-content-slim .nav-title {
+  font-size: 28rpx;
 }
 
 .nav-left {
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 
 .nav-icon-img {
@@ -79,6 +111,7 @@ page {
   display: flex;
   align-items: center;
   gap: 10rpx;
+  flex: 1;
   min-width: 0;
 }
 
@@ -100,6 +133,26 @@ page {
   color: #eff6ff;
 }
 
+/* 伴奏文件名直接当标题，过长时省略 */
+.bg-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bg-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  flex-shrink: 0;
+}
+
+.bg-header-actions .remove-btn {
+  padding: 8rpx 14rpx;
+}
+
 .remove-btn {
   flex-shrink: 0;
   padding: 8rpx 16rpx;
@@ -115,17 +168,6 @@ page {
 
 .remove-btn-disabled {
   color: #71717a;
-}
-
-.bg-filename {
-  display: block;
-  margin-top: 18rpx;
-  font-size: 24rpx;
-  color: #f4f4f5;
-  line-height: 1.5;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .score-filename {
@@ -169,6 +211,251 @@ page {
   font-variant-numeric: tabular-nums;
 }
 
+/* 跳过开头弹窗 */
+.modal-mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 60rpx;
+  background: rgba(0, 0, 0, 0.58);
+}
+
+.modal-panel {
+  width: 100%;
+  padding: 26rpx 26rpx 22rpx;
+  border-radius: 28rpx;
+  border: 2rpx solid #2a2a3e;
+  background: linear-gradient(180deg, #1e1e2e, #151522);
+  box-shadow: 0 20rpx 60rpx rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #f4f4f5;
+}
+
+.modal-close {
+  padding: 6rpx 4rpx;
+  font-size: 22rpx;
+  color: #a1a1aa;
+}
+
+.modal-desc {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 20rpx;
+  line-height: 1.5;
+  color: #7c7c92;
+}
+
+.modal-value {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8rpx;
+  margin-top: 20rpx;
+}
+
+.modal-value-num {
+  font-size: 64rpx;
+  font-weight: 700;
+  color: #fbbf24;
+  font-family: 'Courier New', Courier, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal-value-unit {
+  font-size: 24rpx;
+  color: #a1a1aa;
+}
+
+.modal-slider {
+  margin: 18rpx 0 0;
+}
+
+.modal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-top: 22rpx;
+}
+
+.modal-chip {
+  padding: 10rpx 22rpx;
+  border-radius: 999rpx;
+  background: #1b1b2c;
+  border: 2rpx solid #2a2a3e;
+  font-size: 22rpx;
+  color: #d4d4d8;
+}
+
+.modal-chip-active {
+  background: rgba(251, 191, 36, 0.16);
+  border-color: #f59e0b;
+  color: #fbbf24;
+}
+
+.modal-confirm {
+  margin-top: 26rpx;
+  padding: 20rpx 0;
+  border-radius: 18rpx;
+  text-align: center;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+}
+
+.modal-confirm:active {
+  opacity: 0.75;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 20rpx;
+}
+
+.modal-clear {
+  flex-shrink: 0;
+  padding: 16rpx 8rpx;
+  font-size: 24rpx;
+  color: #f87171;
+}
+
+.modal-clear:active {
+  opacity: 0.7;
+}
+
+.share-name-row {
+  display: flex;
+  align-items: center;
+  margin-top: 20rpx;
+  padding: 16rpx 20rpx;
+  border-radius: 16rpx;
+  background: #151522;
+  border: 2rpx solid #2a2a3e;
+}
+
+.share-name-prefix {
+  flex-shrink: 0;
+  max-width: 300rpx;
+  font-size: 26rpx;
+  color: #c4b5fd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 26rpx;
+  color: #f4f4f5;
+}
+
+.share-name-ph {
+  color: #52525b;
+}
+
+.share-name-ext {
+  flex-shrink: 0;
+  margin-left: 6rpx;
+  font-size: 24rpx;
+  color: #a1a1aa;
+}
+
+/* 最近录音列表 */
+.modal-panel-list {
+  padding-bottom: 18rpx;
+}
+
+.history-list {
+  max-height: 620rpx;
+  margin-top: 18rpx;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 18rpx 18rpx;
+  border-radius: 16rpx;
+  background: #1b1b2c;
+  border: 2rpx solid #2a2a3e;
+}
+
+.history-item + .history-item {
+  margin-top: 14rpx;
+}
+
+.history-item:active {
+  opacity: 0.75;
+}
+
+.history-item-active {
+  border-color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+}
+
+.history-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-name {
+  display: block;
+  font-size: 24rpx;
+  color: #f4f4f5;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-meta {
+  display: block;
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  color: #a1a1aa;
+  font-family: 'Courier New', Courier, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-act,
+.history-del {
+  flex-shrink: 0;
+  padding: 6rpx 6rpx 6rpx 14rpx;
+  font-size: 20rpx;
+}
+
+.history-act {
+  color: #c4b5fd;
+}
+
+.history-del {
+  color: #f87171;
+}
+
+.history-act:active,
+.history-del:active {
+  opacity: 0.7;
+}
+
 .vol-icon-img {
   width: 28rpx;
   height: 28rpx;
@@ -188,8 +475,6 @@ page {
   flex-shrink: 0;
 }
 
-.bg-hint,
-.score-hint,
 .seek-tip,
 .bg-empty-desc {
   display: block;
@@ -198,12 +483,12 @@ page {
   color: #7c7c92;
 }
 
-.bg-hint {
-  margin-top: 14rpx;
-}
-
 .bg-empty,
 .score-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16rpx;
   padding: 28rpx 22rpx;
 }
 
@@ -214,9 +499,29 @@ page {
 }
 
 .bg-empty-main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8rpx;
+}
+
+.restore-btn {
+  flex-shrink: 0;
+  max-width: 320rpx;
+  padding: 10rpx 20rpx;
+  border-radius: 999rpx;
+  background: rgba(96, 165, 250, 0.14);
+  border: 2rpx solid rgba(96, 165, 250, 0.4);
+  font-size: 22rpx;
+  color: #93c5fd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.restore-btn:active {
+  opacity: 0.7;
 }
 
 .bg-empty-title {
@@ -230,11 +535,15 @@ page {
   margin-top: 14rpx;
 }
 
+/* 有歌谱时通栏展示，并占满剩余纵向空间 */
 .score-section-filled {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  margin-left: -24rpx;
+  margin-right: -24rpx;
+  margin-top: 10rpx;
 }
 
 .score-card {
@@ -246,6 +555,9 @@ page {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  padding: 16rpx 24rpx 0;
+  border-radius: 0;
+  border-width: 2rpx 0;
 }
 
 .score-header-actions {
@@ -257,19 +569,16 @@ page {
 .score-list {
   flex: 1;
   min-height: 0;
-  margin-top: 18rpx;
+  margin-top: 14rpx;
+  padding-bottom: 16rpx;
+}
+
+.score-item {
+  position: relative;
 }
 
 .score-item + .score-item {
   margin-top: 20rpx;
-}
-
-.score-item-name {
-  display: block;
-  margin-bottom: 12rpx;
-  font-size: 22rpx;
-  color: #d4d4d8;
-  line-height: 1.5;
 }
 
 .score-image {
@@ -279,8 +588,16 @@ page {
   background: #151522;
 }
 
-.score-hint {
-  margin-top: 12rpx;
+.score-page-badge {
+  position: absolute;
+  right: 14rpx;
+  bottom: 14rpx;
+  padding: 4rpx 16rpx;
+  border-radius: 999rpx;
+  background: rgba(15, 15, 26, 0.72);
+  color: #d4d4d8;
+  font-size: 20rpx;
+  line-height: 1.5;
 }
 
 .seek-section {
@@ -304,8 +621,8 @@ page {
 
 .controls {
   flex-shrink: 0;
-  padding: 18rpx 0 72rpx;
-  padding-bottom: calc(env(safe-area-inset-bottom) + 72rpx);
+  padding: 14rpx 0 28rpx;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 28rpx);
 }
 
 .btn-row {

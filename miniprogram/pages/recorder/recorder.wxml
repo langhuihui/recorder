@@ -5,15 +5,24 @@ var formatTime = function(seconds) {
   var s = Math.floor(seconds % 60)
   return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s
 }
+var filterPresets = function(presets, max) {
+  var out = []
+  for (var i = 0; i < presets.length; i++) {
+    if (presets[i] <= max) out.push(presets[i])
+  }
+  return out
+}
 module.exports.formatTime = formatTime
+module.exports.filterPresets = filterPresets
 </wxs>
 
 <view class="container">
   <view class="nav-bar" style="padding-top: {{statusBarHeight}}px;">
-    <view class="nav-content">
+    <view class="nav-content {{scoreFiles.length ? 'nav-content-slim' : ''}}">
       <view class="nav-left">
         <image class="nav-icon-img" src="/icons/mic.svg" />
-        <text class="nav-title">伴唱助手</text>
+        <text class="nav-title">合唱练习助手</text>
+        <text wx:if="{{recentRecordings.length}}" class="nav-history-btn {{recordingState === 'recording' ? 'nav-history-btn-disabled' : ''}}" catchtap="openHistoryModal">最近 {{recentRecordings.length}}</text>
       </view>
     </view>
   </view>
@@ -23,12 +32,14 @@ module.exports.formatTime = formatTime
       <view class="bg-header">
         <view class="bg-title-row">
           <text class="label-dot bg-dot"></text>
-          <text class="bg-title">伴奏</text>
+          <text class="bg-title">{{bgMusicFileName}}</text>
         </view>
-        <text class="remove-btn {{recordingState === 'recording' ? 'remove-btn-disabled' : ''}}" catchtap="removeBgMusic">移除</text>
+        <view class="bg-header-actions">
+          <text class="remove-btn {{recordingState === 'recording' ? 'remove-btn-disabled' : ''}}" catchtap="openSkipModal">{{bgSkipStart > 0 ? '跳过 ' + bgSkipStart + 's' : '跳过开头'}}</text>
+          <text class="remove-btn {{recordingState === 'recording' ? 'remove-btn-disabled' : ''}}" catchtap="chooseBgMusic">重选</text>
+          <text class="remove-btn {{recordingState === 'recording' ? 'remove-btn-disabled' : ''}}" catchtap="removeBgMusic">移除</text>
+        </view>
       </view>
-
-      <text class="bg-filename">{{bgMusicFileName}}</text>
 
       <view class="bg-progress-track">
         <view class="bg-progress-fill" style="width: {{bgProgressPercent}}%"></view>
@@ -43,8 +54,6 @@ module.exports.formatTime = formatTime
         <text class="vol-text">{{bgVolume}}%</text>
       </view>
 
-      <text class="bg-hint" wx:if="{{recordingState === 'recording'}}">录音中已锁定伴奏设置</text>
-      <text class="bg-hint" wx:else>录音前可更换伴奏文件或调整音量</text>
     </view>
 
     <view wx:else class="bg-empty {{recordingState === 'recording' ? 'bg-empty-disabled' : ''}}" bindtap="chooseBgMusic">
@@ -53,6 +62,7 @@ module.exports.formatTime = formatTime
         <text class="bg-empty-desc" wx:if="{{recordingState === 'recording'}}">录音中不可添加，请先停止录音</text>
         <text class="bg-empty-desc" wx:else>从微信聊天中选择音频</text>
       </view>
+      <text wx:if="{{removedBg}}" class="restore-btn" catchtap="restoreBgMusic">恢复「{{removedBg.fileName}}」</text>
     </view>
   </view>
 
@@ -68,19 +78,18 @@ module.exports.formatTime = formatTime
 
       <scroll-view class="score-list" scroll-y="true">
         <view wx:for="{{scoreFiles}}" wx:key="path" class="score-item">
-          <text class="score-item-name">第 {{index + 1}}/{{scoreFiles.length}} 页</text>
           <image class="score-image" src="{{item.path}}" mode="widthFix"></image>
+          <text class="score-page-badge">{{index + 1}}/{{scoreFiles.length}}</text>
         </view>
       </scroll-view>
-
-      <text class="score-hint">歌谱按竖向顺序展示</text>
     </view>
 
     <view wx:else class="score-empty" bindtap="chooseScoreFile">
       <view class="bg-empty-main">
         <text class="bg-empty-title">添加歌谱</text>
-        <text class="bg-empty-desc">从微信聊天中选择多张图片</text>
+        <text class="bg-empty-desc">从手机相册或微信聊天中选择多张图片</text>
       </view>
+      <text wx:if="{{removedScores.length}}" class="restore-btn" catchtap="restoreScoreFile">恢复刚才的 {{removedScores.length}} 张歌谱</text>
     </view>
   </view>
 
@@ -121,7 +130,7 @@ module.exports.formatTime = formatTime
         <image class="btn-icon-img" src="/icons/refresh.svg" />
         <text class="btn-text">重录</text>
       </view>
-      <view class="btn btn-secondary" bindtap="shareRecording">
+      <view class="btn btn-secondary" bindtap="openShareModal">
         <image class="btn-icon-img" src="/icons/share.svg" />
         <text class="btn-text">分享</text>
       </view>
@@ -129,6 +138,86 @@ module.exports.formatTime = formatTime
         <image class="btn-icon-img" src="/icons/save.svg" />
         <text class="btn-text">保存</text>
       </view>
+    </view>
+  </view>
+
+  <view wx:if="{{skipModalVisible}}" class="modal-mask" bindtap="closeSkipModal" catchtouchmove="noop">
+    <view class="modal-panel" catchtap="noop">
+      <view class="modal-header">
+        <text class="modal-title">跳过开头</text>
+        <text class="modal-close" catchtap="closeSkipModal">关闭</text>
+      </view>
+
+      <text class="modal-desc">录音开始时，伴奏从 {{util.formatTime(bgSkipStart)}} 处开始播放</text>
+
+      <view class="modal-value">
+        <text class="modal-value-num">{{bgSkipStart}}</text>
+        <text class="modal-value-unit">秒</text>
+      </view>
+
+      <slider class="modal-slider" min="0" max="{{bgSkipMax}}" step="0.5" value="{{bgSkipStart}}"
+        bindchanging="onSkipStartChanging" bindchange="onSkipStartChange"
+        activeColor="#f59e0b" backgroundColor="#2a2a3e" block-size="18" show-value="{{false}}" />
+
+      <view class="modal-chips">
+        <text wx:for="{{util.filterPresets(skipPresets, bgSkipMax)}}" wx:key="*this"
+          class="modal-chip {{bgSkipStart === item ? 'modal-chip-active' : ''}}"
+          data-value="{{item}}" catchtap="onSkipPresetTap">{{item}}s</text>
+      </view>
+
+      <view class="modal-confirm" catchtap="closeSkipModal">完成</view>
+    </view>
+  </view>
+
+  <view wx:if="{{recentModalVisible}}" class="modal-mask" bindtap="closeHistoryModal" catchtouchmove="noop">
+    <view class="modal-panel modal-panel-list" catchtap="noop">
+      <view class="modal-header">
+        <text class="modal-title">最近录音</text>
+        <text class="modal-close" catchtap="closeHistoryModal">关闭</text>
+      </view>
+
+      <text class="modal-desc">最多保留 {{maxHistory}} 条，点一条即可载入播放</text>
+
+      <scroll-view class="history-list" scroll-y="true">
+        <view wx:for="{{recentRecordings}}" wx:key="path" data-index="{{index}}" bindtap="loadRecording"
+          class="history-item {{item.path === recordingFilePath ? 'history-item-active' : ''}}">
+          <view class="history-main">
+            <text class="history-name">{{item.bgName || '无伴奏'}}</text>
+            <text class="history-meta">{{item.timeLabel}} · {{util.formatTime(item.duration)}}</text>
+          </view>
+          <text class="history-act" data-index="{{index}}" catchtap="shareRecordingItem">分享</text>
+          <text class="history-del" data-index="{{index}}" catchtap="deleteRecording">删除</text>
+        </view>
+      </scroll-view>
+
+      <view class="modal-footer">
+        <text class="modal-clear" catchtap="clearAllRecordings">清空全部</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{shareModalVisible}}" class="modal-mask" bindtap="closeShareModal" catchtouchmove="noop">
+    <view class="modal-panel" catchtap="noop">
+      <view class="modal-header">
+        <text class="modal-title">分享录音</text>
+        <text class="modal-close" catchtap="closeShareModal">关闭</text>
+      </view>
+
+      <text class="modal-desc">{{sharePrefix ? '伴奏名作为前缀，只需填写后面的部分' : '设置好友收到的文件名'}}</text>
+
+      <view class="share-name-row">
+        <text wx:if="{{sharePrefix}}" class="share-name-prefix">{{sharePrefix}}_</text>
+        <input class="share-name-input" value="{{shareFileName}}" bindinput="onShareNameInput"
+          placeholder="{{sharePrefix ? '可留空' : '请输入文件名'}}" placeholder-class="share-name-ph"
+          maxlength="40" focus="{{true}}" />
+        <text class="share-name-ext">.mp3</text>
+      </view>
+
+      <view class="modal-chips">
+        <text class="modal-chip" catchtap="resetShareName">恢复默认</text>
+      </view>
+
+      <view class="modal-confirm" catchtap="confirmShare">分享</view>
     </view>
   </view>
 </view>
