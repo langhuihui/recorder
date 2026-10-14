@@ -1,5 +1,6 @@
 var HISTORY_KEY = 'recentRecordings'
 var SHARE_SUFFIX_KEY = 'lastShareSuffix'
+var SESSION_KEY = 'lastSession'
 var MAX_HISTORY = 10
 
 Page({
@@ -46,6 +47,7 @@ Page({
     this.setData({ statusBarHeight: sysInfo.statusBarHeight })
 
     this._loadRecordings()
+    this._restoreSession()
     this.recorderManager = wx.getRecorderManager()
 
     var self = this
@@ -195,7 +197,8 @@ Page({
       extension: ['mp3', 'wav', 'aac', 'm4a', 'ogg', 'flac'],
       success: function (res) {
         var file = res.tempFiles[0]
-        self._loadBgMusic(file.path, file.name)
+        var kept = self._keepFile(file.path, 'bgm', 'bg' + self._extOf(file.path, '.mp3'))
+        self._loadBgMusic(kept, file.name)
       }
     })
   },
@@ -261,6 +264,8 @@ Page({
       bgSkipStart: 0,
       bgSkipMax: 60
     })
+
+    self._persistSession()
   },
 
   removeBgMusic: function () {
@@ -287,6 +292,8 @@ Page({
       bgSkipStart: 0,
       bgSkipMax: 60
     })
+
+    this._persistSession()
   },
 
   restoreBgMusic: function () {
@@ -298,6 +305,7 @@ Page({
     var skip = removed.skipStart || 0
     this._loadBgMusic(removed.path, removed.fileName)
     this.setData({ bgSkipStart: skip })
+    this._persistSession()
   },
 
   openHistoryModal: function () {
@@ -443,6 +451,94 @@ Page({
     try { wx.setStorageSync(HISTORY_KEY, this.data.recentRecordings) } catch (e) {}
   },
 
+  // 把临时文件落到本地存储目录，否则下次打开小程序就找不回来了
+  _keepFile: function (tempPath, subDir, name) {
+    var fs = wx.getFileSystemManager()
+    var dir = wx.env.USER_DATA_PATH + '/' + subDir
+    try { fs.mkdirSync(dir, true) } catch (e) {}
+
+    var savedPath = dir + '/' + name
+    try {
+      fs.saveFileSync(tempPath, savedPath)
+      return savedPath
+    } catch (e) {
+      console.error('文件保存失败，继续使用临时路径:', e)
+      return tempPath
+    }
+  },
+
+  // 落盘文件名必须带扩展名，否则 <image> 认不出格式会渲染成黑块
+  _extOf: function (path, fallback) {
+    var m = String(path || '').match(/\.[a-zA-Z0-9]+$/)
+    if (!m || m[0].length > 6) return fallback || '.jpg'
+    return m[0].toLowerCase()
+  },
+
+  // 文件名只用 ASCII：USER_DATA_PATH 下带中文的路径，部分机型图片会解不出来
+  _scoreSavedName: function (index, name, srcPath) {
+    return 'score_' + index + this._extOf(srcPath, '.jpg')
+  },
+
+  // 换一批歌谱时清掉旧的，避免本地文件越积越多
+  _clearDir: function (subDir) {
+    var fs = wx.getFileSystemManager()
+    try { fs.rmdirSync(wx.env.USER_DATA_PATH + '/' + subDir, true) } catch (e) {}
+  },
+
+  _fileExists: function (path) {
+    if (!path) return false
+    try {
+      wx.getFileSystemManager().accessSync(path)
+      return true
+    } catch (e) {
+      return false
+    }
+  },
+
+  _persistSession: function () {
+    var session = {
+      bg: this.data.bgMusicPath ? {
+        path: this.data.bgMusicPath,
+        fileName: this.data.bgMusicFileName,
+        skipStart: this.data.bgSkipStart,
+        volume: this.data.bgVolume
+      } : null,
+      scores: this.data.scoreFiles
+    }
+    try { wx.setStorageSync(SESSION_KEY, session) } catch (e) {}
+  },
+
+  _restoreSession: function () {
+    var session = null
+    try { session = wx.getStorageSync(SESSION_KEY) || null } catch (e) {}
+    if (!session) return
+
+    if (session.bg && this._fileExists(session.bg.path)) {
+      if (isFinite(session.bg.volume)) {
+        this.setData({ bgVolume: session.bg.volume })
+      }
+      this._loadBgMusic(session.bg.path, session.bg.fileName)
+      this.setData({ bgSkipStart: session.bg.skipStart || 0 })
+      this._persistSession()
+    }
+
+    var scores = []
+    if (Object.prototype.toString.call(session.scores) === '[object Array]') {
+      for (var i = 0; i < session.scores.length; i++) {
+        if (this._fileExists(session.scores[i].path)) scores.push(session.scores[i])
+      }
+    }
+    if (scores.length) this.setData({ scoreFiles: scores })
+  },
+
+  _safeFileName: function (name, fallback) {
+    var s = String(name || '')
+      .replace(/[\/\\:*?"<>|\r\n\t]/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return s || (fallback || 'file')
+  },
+
   _archiveRecording: function (tempPath, duration) {
     if (!tempPath) return
 
@@ -487,11 +583,7 @@ Page({
 
   _bgName: function () {
     if (!this.data.bgMusicFileName) return ''
-    var bg = String(this.data.bgMusicFileName)
-      .replace(/\.[^.]+$/, '')
-      .replace(/[\/\\:*?"<>|\r\n\t]/g, '_')
-      .replace(/\s+/g, ' ')
-      .trim()
+    var bg = this._safeFileName(this.data.bgMusicFileName, '').replace(/\.[^.]+$/, '')
     if (bg.length > 24) bg = bg.slice(0, 24)
     return bg
   },
@@ -548,6 +640,7 @@ Page({
       try { this.bgAudioCtx.seek(val) } catch (err) {}
     }
     this._applyBgProgress(val)
+    this._persistSession()
   },
 
   _updateSkipMax: function () {
@@ -582,6 +675,7 @@ Page({
     if (this.bgAudioCtx) {
       this.bgAudioCtx.volume = val / 100
     }
+    this._persistSession()
   },
 
   chooseScoreFile: function () {
@@ -607,15 +701,18 @@ Page({
       sourceType: ['album'],
       sizeType: ['original'],
       success: function (res) {
+        self._clearDir('scores')
         var files = (res.tempFiles || []).map(function (file, index) {
+          var name = '相册歌谱' + (index + 1)
           return {
-            path: file.tempFilePath,
-            name: '相册歌谱' + (index + 1)
+            path: self._keepFile(file.tempFilePath, 'scores', self._scoreSavedName(index, name, file.tempFilePath)),
+            name: name
           }
         })
 
         if (files.length) {
           self.setData({ scoreFiles: files, removedScores: [] })
+          self._persistSession()
         }
       }
     })
@@ -627,15 +724,18 @@ Page({
       count: 9,
       type: 'image',
       success: function (res) {
+        self._clearDir('scores')
         var files = (res.tempFiles || []).map(function (file, index) {
+          var name = file.name || ('歌谱' + (index + 1))
           return {
-            path: file.path,
-            name: file.name || ('歌谱' + (index + 1))
+            path: self._keepFile(file.path, 'scores', self._scoreSavedName(index, name, file.path)),
+            name: name
           }
         })
 
         if (files.length) {
           self.setData({ scoreFiles: files, removedScores: [] })
+          self._persistSession()
         }
       }
     })
@@ -646,6 +746,7 @@ Page({
       removedScores: this.data.scoreFiles,
       scoreFiles: []
     })
+    this._persistSession()
   },
 
   restoreScoreFile: function () {
@@ -656,6 +757,7 @@ Page({
       scoreFiles: this.data.removedScores,
       removedScores: []
     })
+    this._persistSession()
   },
 
   initPlaybackAudio: function (filePath) {
